@@ -1,19 +1,20 @@
-from astropy.io import fits as afits
+#from astropy.io import Afits as afits
 import pyfits as pf
 import numpy as np
 import matplotlib as mpl
-#import matplotlib.pyplot as plt
+import time, datetime
+import matplotlib.pyplot as plt
 import pickle
 import subprocess
 import math
 import scipy
+from scipy.signal import medfilt
 from scipy.optimize import curve_fit
 from scipy.ndimage.interpolation import shift
 from scipy.ndimage.fourier import fourier_shift as fshift
 from os.path import exists
 import threading
-import random
-import gc
+from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
 
 #sky()
@@ -33,7 +34,9 @@ struct_ShaneAO_total_sets = {'Jun15':28, 'Nov15':25, 'Mar16':25}
 total_sets = struct_ShaneAO_total_sets[date]
 
 #Showing date when script is run
+print '------'
 print 'Working with', date, 'files'
+print '------'
 
 #Set parameters of region where light hits telescope
 arr_region_bounds = open(directory + '/' + date + '/telescope_region.txt', 'rb').read().splitlines()
@@ -42,10 +45,12 @@ region_x_max_index = int(arr_region_bounds[1])
 region_y_min_index = int(arr_region_bounds[2])
 region_y_max_index = int(arr_region_bounds[3])
 
+'''
 print region_x_min_index
 print region_x_max_index
 print region_y_min_index
 print region_y_max_index
+'''
 
 #Correlation matrix parameters:
 max_numb_imgs = 5000
@@ -213,8 +218,8 @@ def median_it(arr_filenumbs):
         arr_output = np.median(np.array(arr_mdn), axis = 0)
         return arr_output
 
-def norm_median_subdark(arr_filenumbs):
 
+def norm_median_subdark(arr_filenumbs):
         arr_mdn = []
         print arr_filenumbs
         img_dark = pf.open(directory + '/' + date + '/' + 'img_dark.fits')[0].data
@@ -261,7 +266,6 @@ def create_flats():
 
 
         try:
-
                 img_ks_flat = norm_median_subdark(arr_ks_flat)
                 hdu = pf.PrimaryHDU(img_ks_flat)
                 hdulist = pf.HDUList([hdu])
@@ -287,6 +291,392 @@ def create_flats():
                 print 'error with img_flat_j'                
 
 
+def run_create_filts():
+        #Create high-pass filtered images for all recorded stars
+        #------
+
+        len_filt_box = 21
+
+        for date_science in arr_date_ShaneAO: #loop through dates for ShaneAO runs
+                total_setnumb = struct_ShaneAO_total_sets[date_science] #Total number of "sets" of recorded stars for date
+                print 'Date:', date_science
+                for setnumb in np.arange(1,total_setnumb+1).astype(int): #loop through sets of stars
+                        print 'working with set', setnumb
+                        #------
+                        # open up txt file for set, add all img numbers for that set into arr_targpsf
+                        #------
+                        setnumb = str(setnumb)
+                        arr_startend = open(directory + '/' + date_science + '/set_'+ setnumb +'_info.txt', 'rb').read().splitlines()
+                        start = int(arr_startend[0])
+                        end = int(arr_startend[1])
+                        arr_targ = np.arange(start, end+1)
+
+
+                        for img_numb in arr_targ:
+                                filename_init =  directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_reduced_centered.fits'
+                                filename_init2 = directory + '/' + date_science  + '/s0' + str(int(img_numb)) + '_reduced_centered.fits'
+                                if img_numb > 999:
+                                        filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_RCF.fits'
+                                else:
+                                        filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_RCF.fits'
+                                        subprocess.call('rm -rf ' + filename_output, shell = True) ###
+                                        print 'deleted', filename_output
+                                        filename_output  = directory + '/' + date_science  + '/s0' + str(int(img_numb)) + '_RCF.fits'
+
+                                if exists(filename_output):
+                                        continue
+                                elif exists(filename_init):
+                                        img_targ = pf.open(filename_init)[0].data
+                                elif exists(filename_init2):
+                                        img_targ = pf.open(filename_init2)[0].data
+                                else:
+                                        print img_numb, "doesn't exists"
+                                        continue
+                                        
+                                img_targ -= medfilt(img_targ, [len_filt_box, len_filt_box])
+                                save_fits(img_targ, filename_output)
+                                print 'saved:', filename_output
+
+
+
+def run_loci_mockbins(setnumb1, bin_cond = True):
+        # Run LOCI with mock binaries
+        #------
+        
+
+        #------
+        # Open LOCI-subtracted, medianed img for set number
+        # Record dimensions of array
+        # Record total number of elements in array
+        #------
+        filename_fits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_locifinal.fits'
+        img_subed = pf.open(filename_fits)[0].data
+        img1shape = img_subed.shape
+        img1size = img_subed.size
+
+
+        
+        #------
+        # Define LOCI parameters 
+        # Define high-pass filter box dimensions(width)
+        #------
+        max_rad_img = 80
+        numb_imgs_keep = 200 #number of imgs to keep from correlation matrix
+        fwhm_threshold = 10 #maximum FWHM to keep
+	maxpix_threshold = 35000 #exclude imgs with max pixel value above this number
+	minpix_threshold = 5000 #exclude imgs with min pixel value below this number
+        len_filt_box = 21 #for high-pass filter, take median of square with this length around points
+
+
+
+        #------
+        #Parameters for subtraction/optimization radius for LOCI
+        #------
+        radius_sub = 6
+        radius_op = 19
+
+        
+        if bin_cond:
+                #------
+                #Define mock-up binary arrays
+                #------
+                arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int) #np.array([10, 15, 20, 25, 30, 45, 60]).astype(int)
+                print 'arr_radiusmock', arr_radiusmock
+                arr_theta = np.arange(0, 360, 60).astype(int)
+                print 'arr_theta', arr_theta
+        else:
+                arr_radiusmock = [0]
+                arr_theta = [0]
+
+
+        
+        #------
+        #Iterate through radii for mock binaries
+        #Check LOCI-subtracted img for 5 sigma value at that radius
+        #Create array of corresponding flux ratio
+        #------
+        if bin_cond:
+                arr_fluxratio = []
+                for rad_mock in arr_radiusmock:
+                        struct_ring = check_ring(img_subed, rad_mock)
+                        sd_ring = struct_ring['sd_ring']
+                        arr_fluxratio.append(sd_ring*50)
+
+                
+        
+        #------
+        #arr_date_ShaneAO: array of date names in telescope directory
+        #index_date_targ: index of date in arr_date_ShaneAO
+        #------
+        #print 'arr_date_ShaneAO', arr_date_ShaneAO
+        #print 'date of target psf', date
+        index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
+        #print 'index_date_targ', index_date_targ
+
+
+        
+        #------
+        # For set of target imgs,
+        # read txt file in directory to know which files to use
+        #------
+        setnumb1 = str(setnumb1)
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+        arr_targpsf = np.arange(start1, end1+1)
+	#print 'arr_targpsf', arr_targpsf
+        
+
+        
+        #------
+        #check for filter of 1st img in set
+        #------
+	filter_of_set = check_filter(start1, date) 
+        print 'filter_of_set', filter_of_set
+
+
+
+        #------
+        #open txt file with list of known binaries
+        #------
+        arr_bin = open(directory + '/' + directory + '_clearbinaries.txt', 'rb').read().splitlines()
+        arr_bin_dates = np.array(arr_bin[0::2])
+        arr_bin_setnumbs = np.array(arr_bin[1::2])
+        #print 'arr_bin_dates', arr_bin_dates
+        #print 'arr_bin_setnumbs', arr_bin_setnumbs
+        
+        
+        #------
+        # Add reference filenumbs from all dates
+        #------
+        arr_substar = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                total_sets = struct_ShaneAO_total_sets[date_ref]
+                print 'total_sets', total_sets
+                arr_substar_temp = np.array([]) #array for adding ref psf filenames
+                for setnumb2 in np.arange(1,total_sets+1):
+                        if setnumb2 == int(setnumb1) and index_date_targ == index_date:
+                                print date_ref, 'set', setnumb2, 'skipped'
+                                continue
+                        elif str(int(setnumb2)) in arr_bin_setnumbs:
+                                arr_index_setnumb_bin = np.where(arr_bin_setnumbs == str(int(setnumb2)))[0]
+                                #print arr_index_setnumb_bin
+                                '''
+                                print '------'
+                                print 'index_setnumb', index_setnumb
+                                print 'set number', setnumb2
+                                print 'corresponding date in txt file', arr_bin_dates[index_setnumb]
+                                print 'date in loop', date_ref
+                                '''
+                                for index_setnumb_bin in arr_index_setnumb_bin:
+                                        if arr_bin_dates[index_setnumb_bin] == date_ref:
+                                                print date_ref, 'set', setnumb2, 'skipped since it is a known binary'
+                                                continue
+                        else:
+                                ####date_ref and setnumb2
+                                #print 'adding elements in set no.', setnumb2, 'for date', date_ref
+                                arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
+                                start2 = int(arr_startend2[0])
+                                end2 = int(arr_startend2[1])
+                                arr_imgnumbs = np.arange(start2, end2+1)
+                                arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
+                                arr_temp = np.zeros(arr_imgnumbs.size)
+                                arr_temp.fill(setnumb2)
+                arr_substar_temp = arr_substar_temp.astype(int)
+                arr_substar.append(arr_substar_temp)
+        print 'arr_substar', arr_substar
+
+
+        
+        #------
+        # load reference imgs one by one
+        # Check filter, FWHM, max/min pixel values, img size
+        # Include only the ones within parameters set above at beginning of function
+        #------
+        arr_j = []
+        arr_img2 = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                arr_j_temp = []
+                arr_img2_temp = []
+                arr_substar_temp = arr_substar[index_date]
+                #print 'arr_substar_temp', arr_substar_temp
+                for j in arr_substar_temp: #loop through ref imgs
+                        #print 'compiling img', j, 'for subtraction'
+                        arr_output = []
+                        arr_rss = np.array([])
+                        j_index = np.argwhere(arr_substar_temp == j)
+                        j_index = j_index[0]
+                        j_index = j_index[0]
+                        if j > 999:
+                                filename =  directory + '/' + date_ref  + '/s' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        #print filename, 'doesnt exist'
+                                        continue
+                        else:
+                                filename =  directory + '/' + date_ref  + '/s0' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        #print filename, 'doesnt exist'
+                                        continue
+
+                        img_filter = check_filter(j, date_ref)
+                        
+                        if img_filter != filter_of_set: #removing frames of different filter
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'img filter: ', img_filter, 'different from set filter:', filter_of_set
+                                continue
+                        elif maxpixval > maxpix_threshold or maxpixval < minpix_threshold: #removing frames with max pix values not within threshold
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'max pixel value of', maxpixval, 'not within allowed region'
+                                continue
+
+                        fwhm = get_fwhm(img2)
+                        if not fwhm: #remove frames that gaussian func couldn't fit
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                continue 
+                        elif fwhm > fwhm_threshold: #remove frames with large fwhm
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'FWHM greater than', fwhm_threshold
+                                continue
+                        arr_j_temp.append(int(j))
+                        img2 = img2.flatten() #change to 1D array
+                        
+                        if img2.size != img1size: ####****!!!!!Change if necessary
+                                print 'img2.shape', img2.shape
+                                print j, date_ref
+                        arr_img2_temp.append(img2)
+                arr_img2_temp = np.array(arr_img2_temp)
+                print 'arr_img2_temp.shape', arr_img2_temp.shape, 'for date:', date_ref
+                arr_img2.append(arr_img2_temp)
+                arr_j.append(arr_j_temp)
+
+
+                
+        #------        
+        #Load array of filenumbs for ShaneAO, correlation matrix, and corresponding filenumbs in matrix
+        #------
+        print 'loading cross-correlation matrix to find best reference imgs'
+        filename_structShaneAOfilenumbs = 'struct_ShaneAO_filenumbs.p'
+        struct_ShaneAO_filenumbs = pickle.load(open(filename_structShaneAOfilenumbs, 'rb'))
+        filename_matrixcorr = 'matrix_corr.p'
+        matrix_corr = pickle.load(open(filename_matrixcorr, 'rb'))
+        filename_arrfilenumbscorr = 'arr_filenumbs_corr.p'
+        arr_filenumbs_corr = pickle.load(open(filename_arrfilenumbscorr, 'rb')).astype(int)
+        setnumb1 = int(setnumb1) #set numb for target psf img
+        arr_filenumbs = struct_ShaneAO_filenumbs[index_date_targ]
+
+
+        
+        #------
+        #Getting rid of frames of the same set in correlation matrix
+        #------
+        for element in arr_targpsf: 
+                index_i_chunk = np.argwhere(arr_filenumbs == element)
+                index_i_chunk = index_i_chunk[0][0]
+                #print 'index_i_chunk', index_i_chunk
+                #print 'check it', (index_date_targ*max_numb_imgs) + index_i_chunk
+                matrix_corr[:, (index_date_targ*max_numb_imgs) + index_i_chunk] = 100
+
+
+
+        #------
+        #Fill an array with indexes of dates coresponding to correlation matrix
+        #------
+        numb_dates = len(struct_ShaneAO_filenumbs)
+        arr_indexdate_corrs = np.zeros(numb_dates*max_numb_imgs)
+        for index_indexdatecorrs in np.arange(numb_dates):
+                arr_indexdate_corrs[index_indexdatecorrs*max_numb_imgs:(index_indexdatecorrs+1)*max_numb_imgs] = index_indexdatecorrs
+        arr_indexdate_corrs = arr_indexdate_corrs.astype(int)
+
+
+
+        #------
+        # Create list of structures with info for LOCI function
+        # Takes certain number of best imgs by referencing correlation matrix
+        #------
+        print 'creating array of best reference imgs...'
+        arr_pool_vars = []	
+        for index_i in np.arange(arr_targpsf.size):
+                print '% of imgs added:', (index_i+1)*100./arr_targpsf.size
+                arr_img2_optimal = []
+                arr_j_optimal = []
+                i = arr_targpsf[index_i] #file number of target img
+                index_i = np.argwhere(arr_filenumbs == i)[0][0]
+		arr_corrs = matrix_corr[(index_date_targ*max_numb_imgs) + index_i, :] #extract row in correlation matrix
+                index_sort_corr = np.argsort(arr_corrs) #sort row for best correlations
+                arr_indexdateoptimal = arr_indexdate_corrs[index_sort_corr] #corresponding sorted date indexes
+                arr_filenumbs_optimal = arr_filenumbs_corr[index_sort_corr] #corresponding sorted reference file numbers
+                arr_index_j_optimal = []
+                for index_optimal in np.arange(arr_filenumbs_optimal.size).astype(int):
+                        index_date_optimal = arr_indexdateoptimal[index_optimal]
+                        filenumb_optimal = arr_filenumbs_optimal[index_optimal]
+                        index_j_optimal = np.argwhere(arr_j[index_date_optimal] == filenumb_optimal)
+                        if index_j_optimal:
+                                arr_j_optimal.append(arr_j[index_date_optimal][index_j_optimal[0][0]]) #file numb           
+                                img2_optimal = arr_img2[index_date_optimal][index_j_optimal[0][0]] #flattened reference img
+                                
+                                #------
+                                # Perform high-pass filter subtraction !!!***Change if necessary!!!***
+                                #------
+                                img2_optimal -= medfilt(img2_optimal.reshape(img1shape), [len_filt_box, len_filt_box]).flatten()
+                                
+                                arr_img2_optimal.append(img2_optimal)
+                        if len(arr_j_optimal) >= numb_imgs_keep:
+                                break
+                arr_img2_optimal = np.array(arr_img2_optimal)
+                arr_img2_optimal = np.transpose(arr_img2_optimal)
+                #print 'arr_img2_optimal.shape', arr_img2_optimal.shape
+                for index_rad in np.arange(arr_radiusmock.size):
+                        rad_mock = arr_radiusmock[index_rad]
+                        fluxratio = arr_fluxratio[index_rad]
+                        for theta_mock in arr_theta:
+                                struct = {'i': i, 'arr_img2': arr_img2_optimal, 'radius_sub': radius_sub, 'radius_op':radius_op, 'max_rad_img':max_rad_img, 'theta_mock':theta_mock, 'fluxratio':fluxratio, 'rad_mock':rad_mock, 'len_filt_box':len_filt_box, 'bin_cond':bin_cond}
+                                arr_pool_vars.append(struct)
+
+                
+
+        #print struct
+                                                        
+        #------
+        #Save/load list of structures as needed
+        #------
+        #filename_arrpoolvars = 'loci_arr_pool_vars_' + date + 'set' + str(int(setnumb1)) + '.p'        
+        #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb'))
+        #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb'))
+        
+        print '------------------------'
+	print 'No of loops to run:', len(arr_pool_vars)
+        print '------------------------'
+        print 'Now starting threads...'
+
+        
+
+        #------
+        #Run LOCI. Comment/uncomment sections for when thread is needed/not needed
+        #------
+	
+	for elem in arr_pool_vars:
+		theloci(elem)
+        
+        '''
+	threadnumb = 1
+	thepool = ThreadPool(threadnumb)
+        arr_pool = thepool.map(theloci, arr_pool_vars)
+        thepool.close()
+	'''
+
+
+
+        
 def cleanup_flat():
         #### ___Change the next few lines as necessary!!!___
 	threshold_min = 0.7
@@ -525,6 +915,9 @@ def center_imgs(setnumb):
 
         
 def run_create_sky():
+#run create_sky for all science stars for specific observing date
+#create_sky medians science imgs to create sky img
+
 	startset = 1
         arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
         threadnumb = 6
@@ -540,6 +933,7 @@ def run_create_sky():
         '''
         
 def run_create_reduced_imgs():
+        
 
         startset = 1
         #'''
@@ -611,63 +1005,76 @@ def that_histo():
 	plt.show()
 	
 
-
-
-'''
-def mock_binary():
-	file1 = raw_input("First centroid? (Don't include .fits):")
-	file2 = raw_input("2nd centroid? (Don't include .fits):")
-	arr_flux = (np.arange(20.)+1)/100. #try log space, should be better
-	arr_rad = np.arange(20)+1
-	arr_detect = np.zeros([arr_rad.size, arr_flux.size])
-	arr_detect.fill(0)
-	#arr_detect = pickle.load(open("mock_binary_detlim.p", "rb" ))
-	for index_flux in np.arange(arr_flux.size):
-		flux_ratio = arr_flux[index_flux]
-		img2 = pf.open('centroid_'+file2+'.fits')[0].data
-		img2 /= np.amax(img2)
-		img2 *= flux_ratio
-		for radius in arr_rad:
-			img1 = pf.open('centroid_'+file1+'.fits')[0].data
-			img1 /= np.amax(img1)
-			img1[:,radius:] += img2[:,:-radius]
-			output = img1
-			print 'candidate?:', check_binary(output, radius)
-			print 'flux ratio', flux_ratio
-			print 'radius', radius
-			#if flux_ratio > 0.6:
-			#	a = raw_input('STOP')
-			arr_detect[radius-1, index_flux] = check_binary(output, radius)
-			if check_binary(output, radius) > 0.5:
-				hdu = pf.PrimaryHDU(output)
-				hdulist = pf.HDUList([hdu])
-				hdulist.writeto('test.fits', clobber=True)
-				print 'radius', str(radius)
-				#print 'open -a SAOImage\ DS9 test.fits'
-				subprocess.call('open -a SAOImage\ DS9 test.fits', shell = True)
-
-			outputfilename = 'mock_radius'+str(radius)+'_' + 'ratio' + str(flux_ratio)
-			hdu = pf.PrimaryHDU(output)
-			hdulist = pf.HDUList([hdu])
-			hdulist.writeto(outputfilename + '.fits', clobber=True)
-			print 'radius', str(radius)
-			print 'open -a SAOImage\ DS9 ' + outputfilename + '.fits'
-			subprocess.call('open -a SAOImage\ DS9 ' + outputfilename + '.fits', shell = True)
-			observable = raw_input('Visible binary? (y or n):')
-			if observable == 'y' or observable == 'Y':
-				observable = 1
-			else:
-				observable = 0
-			print observable
-			arr_detect[radius-1, index_flux] = observable
-			print arr_detect
-			pickle.dump(arr_detect, open('mock_binary_detlim.p', 'wb'))
-	print arr_detect
-'''
-
-def psf_subtract_frame():
-#perform psf subtraction frame by frame
+def run_subframe():
+        #------
+        #ask user for set number on which to perform subtractions
+        #------
         setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+
+
+
+        #------
+        #Arrays for parameters of mock binaries
+        #------
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60])
+        print 'arr_radiusmock', arr_radiusmock
+        arr_mockfactor = np.array([100, 150, 200, 500])
+        print 'arr_mockfactor', arr_mockfactor
+        arr_theta = np.array([0])
+        print 'arr_theta', arr_theta
+
+
+        
+        #------
+        # Append structures with parameters onto list
+        # List then acts as input to psf_subtract_frame function
+        #------
+        arr_struct = []
+        for radius_mock in arr_radiusmock:
+                for mock_factor in arr_mockfactor:
+                        for theta in arr_theta:
+                                struct = {'radius_mock':radius_mock, 'mock_factor': mock_factor, 'theta': theta, 'setnumb1':setnumb1}
+                                arr_struct.append(struct)
+
+
+        #------
+        # Run psf_subtract_frame
+        #------
+        print 'Number of subtractions:', len(arr_struct)
+
+
+        threadnumb = 3
+	thepool = ThreadPool(threadnumb)
+        arr_pool = thepool.map(psf_subtract_frame, arr_struct)
+        thepool.close()
+        thepool.join()
+
+        
+        '''
+        for elem in arr_struct:
+                psf_subtract_frame(elem)
+        '''
+
+
+        
+        
+def psf_subtract_frame(struct):
+        #perform psf subtraction frame by frame
+        #------
+        print struct
+        setnumb1 = setnumb1 = struct['setnumb1']
+        #print 'Target set number:', setnumb1
+        radius_mock = struct['radius_mock']
+        mock_factor = struct['mock_factor']
+        theta_mock = struct['theta']
+        filename_output = directory + '/' + date + '/' + 'set' + str(setnumb1) + '_mockrad' + str(radius_mock) + '_ratio' + str(mock_factor) + '_theta' + str(theta_mock) + '.fits'
+        '''
+        if exists(filename_output):
+                print 'SKIP:', 'mockrad', radius_mock, 'ratio', mock_factor, 'theta', theta_mock
+                return 0
+        '''
+        
+        #setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
         arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
         start1 = int(arr_startend1[0])
         end1 = int(arr_startend1[1])
@@ -679,7 +1086,7 @@ def psf_subtract_frame():
         arr_setnumb = np.array([])
         for setnumb2 in np.arange(1,total_sets+1):
                 if setnumb2 != int(setnumb1):
-                        print 'adding elements in set no.', setnumb2
+                        #print 'adding elements in set no.', setnumb2
                         arr_startend2 = open(directory + '/' + date + '/set_'+ str(setnumb2) +'_info.txt', 'rb').read().splitlines()
                         start2 = int(arr_startend2[0])
                         end2 = int(arr_startend2[1])
@@ -690,7 +1097,7 @@ def psf_subtract_frame():
                         arr_setnumb = np.append(arr_setnumb, arr_temp)
 
         #define  subtraction ratios to be iterated through
-        arr_rad = np.arange(70)+1
+        arr_rad = np.arange(80)+1
         arr_subratio = (np.arange(20)+90)/100.
         #________________________________________________
 
@@ -700,21 +1107,58 @@ def psf_subtract_frame():
         arr_5sd = np.array([])
         #________________________________________________
 
-	for i in np.arange(start1, end1+1): #iterating through images in the 1st set '''start1'''
+        print 'starting:', 'mockrad', radius_mock, 'ratio', mock_factor, 'theta', theta_mock, datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+        
+	for i in np.arange(start1, end1+1): #iterating through images in the 1st set
 		print '_________'
-		print i
+                print 'i',i
+                print 'start1',start1
+                print 'end1',end1
+                print 100.*(float(i - start1)/float(end1-start1)), '%', 'for mockrad', radius_mock, 'ratio', mock_factor, datetime.datetime.now().strftime('%m-%d %H:%M:%S')
                 if i > 999:
                         filename = directory + '/' + date + '/s' + str(int(i)) + '_reduced_centered.fits'
                         if exists(filename):
                                 img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1) #divide by max. brightness
                         else:
                                 continue
                 else:
                         filename = directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
                         if exists(filename):
                                 img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1) #divide by max. brightness
                         else:
                                 continue
+
+
+                #------
+                #Insert mock binary
+                #------
+                img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
+                img_mock /= np.amax(img_mock)
+                if mock_factor != 0:
+                        img_mock /= float(mock_factor)
+                else:
+                        img_mock *= float(mock_factor)
+                        
+                if radius_mock != 0:
+                        dx_mock = radius_mock*np.cos(theta_mock*(2*np.pi)/360)
+                        dx_mock = int(round(dx_mock))
+                        dy_mock = radius_mock*np.sin(theta_mock*(2*np.pi)/360)
+                        dy_mock = int(round(dy_mock))
+                        
+                        img_mock = np.fft.fft2(img_mock) #Fourier shift to construct binary
+                        img_mock = fshift(img_mock, [dy_mock, dx_mock])
+                        img_mock = np.fft.ifft2(img_mock)
+                        img_mock = np.real(img_mock)
+                        img1 += img_mock
+                        
+
+
+                #------
+                # Loop through reference img numbers
+                # Check for best subtraction
+                #------
                 counter2 = 0
                 for j in arr_substar:
                         arr_output = []
@@ -734,226 +1178,42 @@ def psf_subtract_frame():
                                         img2 = pf.open(filename)[0].data
                                 else:
                                         continue
-                        for subratio in arr_subratio: #iterating through images in the 1st set
+
+
+                                
+                        #------
+                        # Iterating through subtraction ratios
+                        #------
+                        for subratio in arr_subratio: 
                                 img1_temp = np.copy(img1)
                                 img2_temp = np.copy(img2)
                                 img2_temp /= np.amax(img2_temp) #divide by max. brightness
-                                img1_temp /= np.amax(img1_temp) #divide by max. brightness
-                                center_flux = np.amax(img1_temp)                                
-                                img2_temp *= subratio #multiply mock by subtraction ratio
+                                img2_temp *= subratio #multiply ref img by subtraction ratio
                                 img1_temp -= img2_temp #psf subtract
                                 arr_rss = np.append(arr_rss, np.sum(img1_temp**2.)) #add residual sum of squares to arr_rss.
                                 arr_output.append(img1_temp) #append psf-subtracted img
-                        index_min_rss = np.argmin(arr_rss) #index of minimum rss in array of psfsubtracted imgs of diff sub ratios
+                        index_min_rss = np.argmin(arr_rss) #index of min rss in array of psfsubtracted imgs of diff sub-ratios
                         img_best_subtract = arr_output[index_min_rss]
                         #print 'best subtraction ratio', arr_subratio[index_min_rss]
                         if counter2 == 0:
                                 rss_best = np.sum(img_best_subtract**2.)
                                 img_best = img_best_subtract
-                                #jbest = j
-                                #print 'best rss', rss_best
-                                #print 'best subtraction frame', jbest
                         else:
                                 if np.sum(img_best_subtract**2.) < rss_best:
                                         rss_best = np.sum(img_best_subtract**2.)
                                         img_best = img_best_subtract
-                                        #jbest = j
-                                        #print 'best rss', rss_best
-                                        #print 'best subtraction frame', jbest
                         counter2 += 1
                 arr_img.append(img_best)
         print 'size of arr_img', len(arr_img)
         img_mdn = np.median(np.array(arr_img), axis = 0)
 
-        for radius in arr_rad:
-                struct = check_ring(img_mdn, radius)
-                arr_mdn = np.append(arr_mdn, struct['mdn_ring'])
-                arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])
-
+        print 'creating', filename_output
         hdu = pf.PrimaryHDU(img_mdn)
         hdulist = pf.HDUList([hdu])
-        hdulist.writeto(directory + '/' + date + '/' + 'set' + setnumb1 + '-' + 'others' + '.fits', clobber=True)
+        hdulist.writeto(filename_output, clobber = True)
         
-        pickle.dump(arr_5sd, open(directory + '/' + date + '/' + 'set' + setnumb1 + '-' + 'others' + "_5sdplot.p", 'wb'))
-        pickle.dump(arr_mdn, open(directory + '/' + date + '/' + 'set' + setnumb1 + '-' + 'others' + "_mdnplot.p", 'wb'))
-        #print 'img_final.size', img_final.size
-        #print arr_detect
-        #a = raw_input('stopped')
+        return 1
 
-def outdated_Loci():
-        #define parameters for loci
-        radius_sub = 1 #subtraction radius
-        radius_op = 3 #optimization radius                                                                                                             
-
-        #ask for user input regarding which set to take as target psf
-        #reads txt file in directory to know which files to use
-        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
-        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
-        start1 = int(arr_startend1[0])
-        end1 = int(arr_startend1[1])
-
-        arr_substar = np.array([]) #array for adding ref psf filenames
-	arr_setnumb = np.array([]) #array for adding target psf filenames
-	for setnumb2 in np.arange(1,total_sets+1):
-                if setnumb2 != int(setnumb1):
-                        print 'adding elements in set no.', setnumb2
-                        arr_startend2 = open(directory + '/' + date + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
-                        start2 = int(arr_startend2[0])
-                        end2 = int(arr_startend2[1])
-                        arr_imgnumbs = np.arange(start2, end2+1)
-                        arr_substar = np.append( arr_substar,  arr_imgnumbs) #array of filenames for ref psf
-			arr_temp = np.zeros(arr_imgnumbs.size)
-                        arr_temp.fill(setnumb2)
-                        arr_setnumb = np.append(arr_setnumb, arr_temp) #set numbers
-
-        ##### FOR TESTING #####
-	arr_substar = arr_substar[0:20]
-        print arr_substar
-        arr_setnumb = arr_setnumb[0:20]
-        print arr_setnumb
-        arr_refpsf = np.arange(start1, start1 + 10)
-        ####################### 
-        
-        #define subtraction ratios to be iterated through                                                                                                       
-        arr_rad = np.arange(1, 55, radius_sub)
-        arr_rad = arr_rad.astype(int)
-        arr_radcheck = np.arange(55)+1
-        arr_subratio = (np.arange(20)+90)/100.
-
-        #define empty arrays, for psf-subtracted imgs for avging
-        arr_img = []
-        arr_mdn = np.array([])
-        arr_5sd = np.array([])
-
-        #arr_refpsf = np.arange(start1, end1+1)
-        arr_imgfinals = []
-
-        
-        threadlist = []
-        threadcount = 0
-        for i in arr_refpsf: #iterating through images in the 1st set
-                print '_________'
-                print i
-                if i > 999:
-                        filename = directory + '/' + date  + '/s' + str(int(i)) + '_reduced_centered.fits'
-                        if exists(filename):
-                                img1 = pf.open(filename)[0].data
-                                img1 /= np.amax(img1)
-                        else:
-                                continue
-                else:
-                        filename =  directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
-                        if exists(filename):
-                                img1 = pf.open(filename)[0].data
-                                img1 /= np.amax(img1)
-                        else:
-                                continue
-                img_final = np.zeros(img1.shape)
-                for radi in arr_rad:
-                        print 'working on radius', radi
-                        arr_radsub = np.arange(radi, radi+radius_sub)
-                        #print arr_radsub
-                        arr_radop = np.arange(radi, radi+radius_op)
-                        #print arr_radop
-                        img1op = np.array([])
-                        arr_indexop = []
-                        for rad_op in arr_radop: #creating target optimization annulus
-                                arr_ringop, indexop = return_ring(img1, rad_op)
-                                for element in indexop:
-                                        arr_indexop.append(element)
-                                img1op = np.append(img1op, arr_ringop)
-
-                        img1sub = np.array([])
-                        arr_indexsub = []
-                        for rad_sub in arr_radsub: #creating target subtraction annulus
-                                arr_ringsub, indexsub = return_ring(img1, rad_sub)
-                                for element in indexsub:
-                                        arr_indexsub.append(element)
-                                img1sub = np.append(img1sub, arr_ringsub)
-                        #arr_refsub = np.array([])
-                        arr_refop = np.array([])
-                        arr_j = []
-                        counter2 = 0
-                        for j in arr_substar: #loop through ref imgs
-                                arr_output = []
-                                arr_rss = np.array([])
-                                j_index = np.argwhere(arr_substar == j)
-                                j_index = j_index[0]
-                                j_index = j_index[0]
-                                if j > 999:
-                                        filename =  directory + '/' + date  + '/s' + str(int(j)) + '_reduced_centered.fits'
-                                        if exists(filename):
-                                                img2 = pf.open(filename)[0].data
-                                                img2 /= np.amax(img2)
-                                        else:
-                                                continue
-                                else:
-                                        filename =  directory + '/' + date  + '/s0' + str(int(j)) + '_reduced_centered.fits'
-                                        if exists(filename):
-                                                img2 = pf.open(filename)[0].data
-                                                img2 /= np.amax(img2)
-                                        else:
-                                                continue
-                                arr_j.append(int(j))
-
-                                img2op = np.array([])
-                                for rad_op in arr_radop: #creating reference optimization anunulus
-                                        img2op = np.append(img2op, return_ring(img2, rad_op)[0])
-                                img2op_temp = img2op.reshape(-1,1)
-				
-				if counter2 == 0:
-                                        arr_refop = img2op_temp
-                                        #arr_refsub = img2sub_temp
-				else:
-			                arr_refop = np.concatenate((arr_refop, img2op_temp), axis = 1)
-                                        #arr_refsub = np.concatenate((arr_refsub, img2sub_temp), axis = 1)
-                                counter2 += 1
-                        Y = img1op
-                        print 'Y.shape', Y.shape
-                        X = arr_refop
-                        print 'X.shape', X.shape
-                        alpha = np.dot(np.transpose(X), X)
-                        beta = np.dot(np.transpose(X), Y)
-                        coeffs = np.dot(np.linalg.inv(alpha), beta)
-                        print 'sum of coeffs', np.sum(coeffs)
-                        #print 'coeffs.shape', coeffs.shape
-                        img_fill_annulus = np.zeros(img1.shape)
-                        #print 'arr_j', arr_j
-                        for index_imgs in np.arange(len(arr_j)):
-                                j = arr_j[index_imgs]
-                                j_index = np.argwhere(arr_substar == j)
-                                j_index = j_index[0]
-                                j_index = j_index[0]
-                                if j > 999:
-                                        filename =  directory + '/' + date + '/s' + str(int(j)) + '_reduced_centered.fits'
-                                        img_temp = pf.open(filename)[0].data
-                                else:
-                                        filename =  directory + '/' + date + '/s0' + str(int(j)) + '_reduced_centered.fits'
-                                        img_temp = pf.open(filename)[0].data
-                                img_temp /= np.amax(img_temp)
-                                img_fill_annulus += coeffs[index_imgs]*img_temp
-                        for coord_annulus in arr_indexsub:
-                                img_final[coord_annulus[0], coord_annulus[1]] = img_fill_annulus[coord_annulus[0], coord_annulus[1]]
-
-                img_output = img1 - img_final
-                arr_imgfinals.append(img_output)
-                #hdu = pf.PrimaryHDU(img_output)
-                #hdulist = pf.HDUList([hdu])
-                #hdulist.writeto( directory + '/' + date + '/' 'test_loci.fits', clobber=True)
-                #subprocess.call('/home/apps/ds9/ds9 test_loci.fits', shell = True)
-        img_mdn = np.median(np.array(arr_imgfinals), axis = 0)
-        print 'img_mdn.shape', img_mdn.shape
-        for radius in arr_radcheck:
-                struct = check_ring(img_mdn, radius)
-                arr_mdn = np.append(arr_mdn, struct['mdn_ring'])
-                arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])
-
-        hdu = pf.PrimaryHDU(img_mdn)
-        hdulist = pf.HDUList([hdu])
-        hdulist.writeto(directory + '/' + date + 'set' + setnumb1 + '_loci' + '.fits', clobber=True)
-
-        pickle.dump(arr_5sd, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_5sdplot.p", 'wb'))
-        pickle.dump(arr_mdn, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_mdnplot.p", 'wb'))
 
 def check_filter(filenumb, date):
         #input: file number
@@ -1096,18 +1356,19 @@ def rename_theta():
                                                                 filename_change = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_change)) + '_.p'
                                                                 subprocess.call('mv -f ' + filename_output + ' ' + filename_change,shell = True)
 
-                                                                
 
-        
-def plot_mocks():
+def plot_mocks_klip():
         arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int)#np.arange(15, 60+1, 15).astype(int)
         #arr_radiusmock = arr_radiusmock[::-1]
         print 'arr_radiusmock', arr_radiusmock
         arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000]).astype(int)
         print 'arr_mockfactor', arr_mockfactor
         arr_theta = np.array([0]).astype(int) #np.array([0, 198, 35, 233, 71, 269]).astype(int)
-        #arr_theta = np.array([0]) #np.arange(0, 360, 60).astype(int)
         print 'arr_theta', arr_theta
+        arr_klipmodes = np.array([15, 25, 35]).astype(int)
+        rad_annulus = 10
+
+
         #Test parameters_____
         arr_radius_sub = [6]
         arr_radius_op = [19]
@@ -1122,7 +1383,103 @@ def plot_mocks():
         end1 = int(arr_startend1[1])
 	arr_targpsf = np.arange(start1, end1+1)
         print 'arr_targpsf', arr_targpsf
+
+
         
+        #------
+        # plot different graphs for different flux ratio
+        #------
+        arr_rss = []
+	arr_rad = []
+	arr_radcheck = np.arange(1, 61)
+
+        for mock_factor in arr_mockfactor:
+                for radius_mock in arr_radiusmock:
+                        for theta_mock in arr_theta:
+                                print 'theta_mock', theta_mock
+                                dx_mock = radius_mock*np.cos(theta_mock*np.pi/180)
+                                dx_mock = int(round(dx_mock))
+                                dy_mock = radius_mock*np.sin(theta_mock*np.pi/180)
+                                dy_mock = int(round(dy_mock))
+                                print 'dy_mock, dx_mock:', dy_mock, ',', dx_mock
+                                for numb_klip_modes in arr_klipmodes:
+                                        arr_mdn = []
+                                        for i in arr_targpsf:
+                                                filename_output = directory + '/' + date + '/' + str(i) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radannulus' + str(int(rad_annulus)) + '.fits'
+                                                #filename_output = directory + '/' + date + '/' + str(i) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '.fits'
+                                                if exists(filename_output):
+                                                        img_final = pf.open(filename_output)[0].data
+                                                else:
+                                                        print filename_output, 'doesnt exist'
+                                                        continue
+                                                y_length = img_final.shape[0]
+                                                x_length = img_final.shape[1]
+                                                center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
+                                                index_mock_y, index_mock_x = center_index_y + dy_mock, center_index_x + dx_mock
+                                                arr_mdn.append(img_final)
+                                        if arr_mdn:
+                                                print 'numb of imgs for median:', len(arr_mdn)
+                                                img_mdn = np.median(np.array(arr_mdn), axis = 0)
+                                                filename_finalfits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radannulus' + str(int(rad_annulus)) + '.fits'
+                                                hdu = pf.PrimaryHDU(img_mdn)
+                                                hdulist = pf.HDUList([hdu])
+                                                hdulist.writeto(filename_finalfits, clobber = True)
+
+                                                flux_mock = img_mdn[index_mock_y, index_mock_x]
+                                                flux_mock_diff = 2.5*np.log10((1./mock_factor)/flux_mock)
+                                                print 'img_mdn.shape', img_mdn.shape
+                                                arr_5sd = np.array([])
+                                                for radius in arr_radcheck:
+                                                        if mock_factor < 50:
+                                                                struct = check_ring_mock(img_mdn, radius, theta_mock, 90)
+                                                        else:
+                                                                struct = check_ring_mock(img_mdn, radius, theta_mock)
+                                                        arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])			
+                                                arr_5sd_mag = 2.5*np.log10(1./np.abs(arr_5sd))
+                                                #if all(element > 6 for element in arr_5sd_mag[:10]):
+                                                #plt.plot(arr_radcheck, arr_5sd_mag, 'o-', color = np.random.rand(3,1),  label = '5 s.d. values: ' + 'klip modes:' + str(int(numb_klip_modes)) + ', flux ratio:' + str(mock_factor) + ', mock radius: ' + str(radius_mock) + ', flux lost: ' + str(flux_mock_diff) + 'mag')
+                                                print '------'
+                                                        #index_min = np.argmin(arr_rss)
+                                #plt.legend(loc = 'upper right')
+                                #plt.xlabel('radius (pixels)')
+                                #plt.ylabel('magnitude')
+                                #plt.gca().invert_yaxis()
+                                #plt.show()
+                                #useless = raw_input('waiting for input')
+
+
+
+
+        
+def plot_mocks_loci():
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int)#np.arange(15, 60+1, 15).astype(int)
+        print 'arr_radiusmock', arr_radiusmock
+        arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000]).astype(int)
+        print 'arr_mockfactor', arr_mockfactor
+        arr_theta = np.array([0]).astype(int) #np.array([0, 198, 35, 233, 71, 269]).astype(int)
+        print 'arr_theta', arr_theta
+
+        
+        #Test parameters_____
+        arr_radius_sub = [6]
+        arr_radius_op = [19]
+
+        halfboxcheck = 45
+        
+	#ask for user input regarding which set to take as target psf
+        #reads txt file in directory to know which files to use        
+        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+	arr_targpsf = np.arange(start1, end1+1)
+        print 'arr_targpsf', arr_targpsf
+
+
+        
+        #------
+        # plot different graphs for different flux ratio
+        #------
         arr_rss = []
 	arr_rad = []
 	arr_radcheck = np.arange(1, 61)
@@ -1141,71 +1498,273 @@ def plot_mocks():
                                                 for i in arr_targpsf:
                                                         filename_output = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.p'
                                                         filename_output_fits = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
-                                                        print filename_output
-                                                        if exists(filename_output):
-                                                                #print 'rad_sub, rad_op', radius_sub, radius_op
-                                                                pickle.load(open(filename_arrpoolvars, 'rb'))
-                                                                file_img = open(filename_output, 'rb')
-                                                                img_final = pickle.load(file_img)
-                                                                file_img.close()
-
-                                                                        #print 'Pickle error for', filename_output
-                                                                        #filename_output = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
-                                                                        #if exists(filename_output):
-                                                                        #        img_final = pf.open(filename_output)[0].data
-                                                                        #else:
-                                                                        #        continue
-                                                                #img_final = img_final[80-halfboxcheck:80+halfboxcheck+1,80-halfboxcheck:80+halfboxcheck+1]
-                                                                y_length = img_final.shape[0]
-                                                                x_length = img_final.shape[1]
-                                                                center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
-                                                                index_mock_y, index_mock_x = center_index_y + dy_mock, center_index_x + dx_mock
-                                                                #print 'img_final.shape', img_final.shape
-                                                                #arr_rss.append(np.sum(img_final**2.))
-                                                                #arr_rad.append([radius_sub, radius_op])
-                                                                arr_mdn.append(img_final)
+                                                        #print filename_output_fits
+                                                        if exists(filename_output_fits):
+                                                                img_final = pf.open(filename_output_fits)[0].data
+                                                                '''
+                                                                #print 'Pickle error for', filename_output
+                                                                #filename_output = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
+                                                                #if exists(filename_output):
+                                                                #        img_final = pf.open(filename_output)[0].data
+                                                                #else:
+                                                                #        continue
+                                                                #img_final = img_final[80-halfboxcheck:80+halfboxcheck+1,80-halfboxcheck:80+halfboxcheck+1]'''
                                                         else:
-                                                                print filename_output, 'doesnt exist'
-                                                                continue
+                                                                print 'fits file doesnt exist, checking for pickle file'
+                                                                if exists(filename_output):
+                                                                        try:
+                                                                                with open(filename_output, 'rb') as file_img:
+                                                                                        img_final = pickle.load(file_img)
+                                                                        except:
+                                                                                print filename_output, 'corrupted'
+                                                                                continue
+                                                                else:
+                                                                        print filename_output, 'and', filename_output_fits, 'dont exist'
+                                                                        continue
+                                                        y_length = img_final.shape[0]
+                                                        x_length = img_final.shape[1]
+                                                        center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
+                                                        index_mock_y, index_mock_x = center_index_y + dy_mock, center_index_x + dx_mock
+                                                        arr_mdn.append(img_final)
                                                 if arr_mdn:
+                                                        filename_finalfits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_loci.fits'
                                                         print 'numb of imgs for median:', len(arr_mdn)
-                                                        img_final = np.median(np.array(arr_mdn), axis = 0)
-                                                        flux_mock = img_final[index_mock_y, index_mock_x]
+                                                        img_mdn = np.median(np.array(arr_mdn), axis = 0)
+                                                        flux_mock = img_mdn[index_mock_y, index_mock_x]
                                                         flux_mock_diff = 2.5*np.log10((1./mock_factor)/flux_mock)
-                                                        print 'img_final.shape', img_final.shape
+                                                        print 'img_mdn.shape', img_mdn.shape
                                                         arr_5sd = np.array([])
+
+                                                        img_mdn[center_index_y, center_index_x] = 0
+                                                        
+                                                        hdu = pf.PrimaryHDU(img_mdn)
+                                                        hdulist = pf.HDUList([hdu])
+                                                        hdulist.writeto(filename_finalfits, clobber = True)
+                                                        
                                                         for radius in arr_radcheck:
-                                                                struct = check_ring_mock(img_final, radius, theta_mock)
+                                                                if mock_factor < 50:
+                                                                        struct = check_ring_mock(img_mdn, radius, theta_mock, 90)
+                                                                else:
+                                                                        struct = check_ring_mock(img_mdn, radius, theta_mock)
                                                                 arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])			
                                                         arr_5sd_mag = 2.5*np.log10(1./np.abs(arr_5sd))
                                                         #if all(element > 6 for element in arr_5sd_mag[:10]):
-                                                        plt.plot(arr_radcheck, arr_5sd_mag, 'o-', color = np.random.rand(3,1),  label = '5 s.d. value, ' + 'theta: ' + str(theta_mock) + ', flux ratio:' + str(mock_factor) + ', mock radius: ' + str(radius_mock) + ', flux lost: ' + str(flux_mock_diff) + 'mag')
+                                                        #plt.plot(arr_radcheck, arr_5sd_mag, 'o-', color = np.random.rand(3,1),  label = '5 s.d. value, ' + 'theta: ' + str(theta_mock) + ', flux ratio:' + str(mock_factor) + ', mock radius: ' + str(radius_mock) + ', flux lost: ' + str(flux_mock_diff) + 'mag')
                                                         #index_min = np.argmin(arr_rss)
-                                plt.legend(loc = 'upper right')
-                                plt.xlabel('radius (pixels)')
-                                plt.ylabel('magnitude')
-                                plt.gca().invert_yaxis()
-                                plt.show()
+                                #plt.legend(loc = 'upper right')
+                                #plt.xlabel('radius (pixels)')
+                                #plt.ylabel('magnitude')
+                                #plt.gca().invert_yaxis()
+                                #plt.show()
                                         #useless = raw_input('waiting for input')
-
-
                         
-def create_final_klip():
-        arr_radiusmock = np.arange(15, 60+1, 15).astype(int)
-        print 'arr_radiusmock', arr_radiusmock
-        arr_mockfactor = np.array([30, 500, 1000]) #np.arange(100, 200+1, 50).astype(int)
-        print 'arr_mockfactor', arr_mockfactor
-        arr_theta = np.array([0]) #np.arange(0, 360, 60).astype(int)
-        print 'arr_theta', arr_theta
-        '''
-        #Test parameters_____
-	threadnumb = 6
-	thepool = ThreadPool(threadnumb)
-        arr_imgfinals = thepool.map(klip, arr_pool_vars)
-        thepool.close()
-        thepool.join()
-        '''
+def compare_plots():
+        #------
+	#ask for user input regarding which set to take as target psf
+        #reads txt file in directory to know which files to use        
+        #------
+        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+	arr_targpsf = np.arange(start1, end1+1)
 
+
+
+        #------
+        #Change if necessary
+        #------
+        numb_klip_modes = 25
+        ratio = 1000
+        radius_sub = 6
+        radius_op = 19
+        theta_mock = 0
+        mock_factor = 30
+        arr_x = [10, 15, 20, 25, 30, 45, 60]
+        arr_y_klip = []
+        arr_y_loci = []
+        arr_y_frame = []
+
+
+
+        #------
+        #Load imgs with weak binary
+        #Change filenames if necessary
+        #------
+        filename_loci_clean = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_mockrad10' + '_' +  'ratio1000' + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta0' + '_loci.fits'
+        filename_klip_clean = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + 'kmode25' + '_mockrad10' + '_' +  'ratio1000' + '_theta0' + '_klip.fits'
+        filename_frame_clean = directory + '/' + date + '/' + 'set' + str(setnumb1) + '_mockrad10' + '_ratio1000' + '_theta0' + '.fits'
+        
+        img_loci_clean = pf.open(filename_loci_clean)[0].data
+        img_klip_clean = pf.open(filename_klip_clean)[0].data
+        img_frame_clean = pf.open(filename_frame_clean)[0].data
+                
+                
+        #------
+        # Loop through mock radii,
+        # add corrected detection limit to arr_y_klip and arr_y_loci
+        #------
+        for radius_mock in arr_x:
+                filename_loci = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_loci.fits'
+                filename_klip = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '_klip.fits'
+                filename_frame = directory + '/' + date + '/' + 'set' + str(setnumb1) + '_mockrad' + str(radius_mock) + '_ratio' + str(mock_factor) + '_theta' + str(theta_mock) + '.fits'
+
+                
+
+                #------
+                #calculate angle
+                dx_mock = radius_mock*np.cos(theta_mock*np.pi/180)
+                dx_mock = int(round(dx_mock))
+                dy_mock = radius_mock*np.sin(theta_mock*np.pi/180)
+                dy_mock = int(round(dy_mock))
+
+
+                
+                #------
+                #open fits files
+                img_loci = pf.open(filename_loci)[0].data
+                img_klip = pf.open(filename_klip)[0].data
+                img_frame = pf.open(filename_frame)[0].data
+
+
+                
+                #------
+                #calculate indexes of mock binary
+                y_length = img_loci.shape[0]
+                x_length = img_loci.shape[1]
+                center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
+                index_mock_y, index_mock_x = center_index_y + dy_mock, center_index_x + dx_mock
+
+
+                
+                #------
+                #Calculate flux losses from klip/loci
+                flux_mock_loci = img_loci[index_mock_y, index_mock_x]
+                flux_mock_diff_loci = 2.5*np.log10((1./mock_factor)/flux_mock_loci)
+                flux_mock_klip = img_klip[index_mock_y, index_mock_x]
+                flux_mock_diff_klip = 2.5*np.log10((1./mock_factor)/flux_mock_klip)
+                flux_mock_frame = img_frame[index_mock_y, index_mock_x]
+                flux_mock_diff_frame = 2.5*np.log10((1./mock_factor)/flux_mock_frame)
+
+                
+                print 'radius_mock', radius_mock
+                print 'intial mock peak flux', 1./mock_factor
+                print 'mock peak flux after', flux_mock_frame
+                print 'flux_mock_diff_frame', flux_mock_diff_frame
+                print '------'
+
+                
+                #------
+                #Check clean imgs for 5s.d. values
+                #Subtract flux loss from KLIP/LOCI
+                #Append to arrays for plotting
+                #------
+                struct_loci = check_ring_mock(img_loci_clean, radius_mock, theta_mock)
+                mag_corrected_loci = 2.5*np.log10(1./np.abs(5*struct_loci['sd_ring'])) - flux_mock_diff_loci
+                arr_y_loci.append(mag_corrected_loci)
+                        
+                struct_klip = check_ring_mock(img_klip_clean, radius_mock, theta_mock)
+                mag_corrected_klip = 2.5*np.log10(1./np.abs(5*struct_klip['sd_ring'])) - flux_mock_diff_klip
+                arr_y_klip.append(mag_corrected_klip)
+                
+                struct_frame = check_ring_mock(img_frame_clean, radius_mock, theta_mock)
+                mag_corrected_frame = 2.5*np.log10(1./np.abs(5*struct_loci['sd_ring'])) - flux_mock_diff_frame
+                arr_y_frame.append(mag_corrected_frame)  
+        
+        plt.plot(arr_x, arr_y_loci, 'o-', color = 'b',  label = 'LOCI')
+        plt.plot(arr_x, arr_y_klip, 'o-', color = 'r',  label = 'KLIP')
+        plt.plot(arr_x, arr_y_frame, 'o-', color = 'g', label = 'Frame-by-frame')
+
+        '''
+        minpix = 10
+        arr_radi = np.arange(70)+1
+        arr_5sd_frame = pickle.load(open(directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '-' + 'others' + '_5sdplot.p', 'rb'))
+        plt.plot(arr_radi[minpix:arr_5sd_frame.size], 2.5*np.log10(1./np.abs(arr_5sd_frame[minpix:])), '^-', color = 'g', label = 'Frame-by-frame subtraction')
+        '''
+        
+        plt.legend(loc = 'upper right')
+        plt.xlabel('Radius (pixels)')
+        plt.ylabel('Corrected 5 s.d. values')
+        plt.gca().invert_yaxis()
+        plt.show()
+
+
+def run_create_final_loci():
+        arr_setnumb = np.arange(1, total_sets+1)
+        for setnumb in arr_setnumb:
+                create_final_loci(setnumb)
+
+                
+def create_final_loci(setnumb1):
+        #------
+        # Create final LOCI-subtracted imgs
+        #------
+
+        
+        #------
+        #Ask for user input regarding which set to take as target psf
+        #Reads txt file in directory to know which files to use
+        #------
+        #setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        setnumb1 = str(int(setnumb1))
+        print '------'
+        print setnumb1
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        print arr_startend1
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+        starname = str(arr_startend1[2])
+        starname = starname.replace(' ', '')
+        print starname
+        arr_targpsf = np.arange(start1, end1+1)
+
+        if start1 > 999:
+                filename = directory + '/' + date + '/' + 's' + str(start1) + '.fits'
+                if exists(filename):
+                        fits = pf.open(filename)
+        else:
+                filename = directory + '/' + date + '/' + 's0' + str(start1) + '.fits'
+                if exists(filename):
+                        fits = pf.open(filename)
+        hdr = fits[0].header
+        filtername = hdr['filt1nam']
+        date_taken = hdr['date-obs']
+        print 'date taken', date_taken
+
+
+        
+        #------
+        # Load LOCI subtracted images and add to array for medianing
+        #------
+        arr_for_mdn = []
+        for i in arr_targpsf:
+                filename_input = directory + '/' + date + '/' + str(int(i)) + 'locifinal' + '.fits'
+                try:
+                        with pf.open(filename_input) as f_temp:
+                                img = f_temp[0].data
+                except:
+                        print filename_input, 'doesnt exist', 'from set:', setnumb1
+                        continue
+                arr_for_mdn.append(img)
+        print 'images for mdn:',len(arr_for_mdn)
+        img_final = np.median(np.array(arr_for_mdn), axis = 0)
+
+        
+        
+        #------
+        # Save medianed img as fits file
+        #------
+        
+        filename_output = directory + '/' + date + '/' + starname +  '__' + filtername + '__' + date_taken + '__locifinal.fits'
+        filename_setnumbs = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) +  '_locifinal.fits'
+        hdu = pf.PrimaryHDU(img_final)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename_output, clobber = True)
+        hdulist.writeto(filename_setnumbs, clobber = True)        
+        print 'created', filename_output
+        
+        #useless = raw_input('enter key to continue')
+        
 def test_theta(theta_mock):
         radius_mock = 40
         theta_mock *= (2*np.pi)/360
@@ -1228,10 +1787,11 @@ def test_theta(theta_mock):
         subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)
 
 
-def run_loci4():
+def run_loci_old():
         #------
         #Define parameters
         #------
+        max_rad_img = 80
         numb_imgs_keep = 200 #number of imgs to keep from correlation matrix
         fwhm_threshold = 10 #maximum FWHM to keep
 	maxpix_threshold = 35000 #exclude imgs with max pixel value above this number
@@ -1290,7 +1850,7 @@ def run_loci4():
         print 'filter_of_set', filter_of_set
 
 
-
+        '''
         #------
         # Add reference filenumbs from all dates
         #------
@@ -1467,17 +2027,17 @@ def run_loci4():
                                 for radius_mock in arr_radiusmock:
                                         for mock_factor in arr_mockfactor:
                                                 for theta in arr_theta:
-                                                        struct = {'i': i, 'arr_img2': arr_img2_optimal, 'arr_j': arr_j_optimal, 'radius_sub': radius_sub, 'radius_op':radius_op, 'radius_mock':radius_mock, 'mock_factor': mock_factor, 'theta': theta}
+                                                        struct = {'i': i, 'arr_img2': arr_img2_optimal, 'arr_j': arr_j_optimal, 'radius_sub': radius_sub, 'radius_op':radius_op, 'radius_mock':radius_mock, 'mock_factor': mock_factor, 'theta': theta, 'max_rad_img':max_rad_img}
                                                         arr_pool_vars.append(struct)
 
-
+        '''
                                                         
         #------
         #Save/load list of structures as needed
         #------
         filename_arrpoolvars = 'loci_arr_pool_vars_' + date + 'set' + str(int(setnumb1)) + '.p'        
-        pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb'))
-        #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb'))
+        #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb'))
+        arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb'))
         
         print '------------------------'
 	print 'No of loops to run:', len(arr_pool_vars)
@@ -1493,12 +2053,317 @@ def run_loci4():
 	for elem in arr_pool_vars:
 		loci2(elem)
         '''
+        
 	threadnumb = 6
 	thepool = ThreadPool(threadnumb)
         arr_pool = thepool.map(loci2, arr_pool_vars)
         thepool.close()
         thepool.join()
+
+
+
+def run_theloci_mass():
+        #execute to perform subtractions on all stars from specific observing date
+        #IMPORTANT: To change date working directory, go to top of script and change
+        #------
         
+        total_sets = struct_ShaneAO_total_sets[date]
+        setrange = np.arange(total_sets)+1
+        setrange = setrange.astype(int)
+
+        for setnumb1 in setrange:
+                run_1set_theloci(setnumb1)
+
+def run_loci_mockbins_mass():
+        #execute to perform subtractions on all stars from specific observing date
+        #IMPORTANT: To change date working directory, go to top of script and change
+        #------
+        
+        total_sets = struct_ShaneAO_total_sets[date]
+        setrange = np.arange(total_sets)+1
+        setrange = setrange.astype(int)
+
+        for setnumb1 in setrange:
+                run_loci_mockbins(setnumb1)
+        
+        
+
+        
+def run_1set_theloci(setnumb1):
+        #------
+        #Define parameters
+        #------
+        max_rad_img = 80
+        numb_imgs_keep = 200 #number of imgs to keep from correlation matrix
+        fwhm_threshold = 10 #maximum FWHM to keep
+	maxpix_threshold = 35000 #exclude imgs with max pixel value above this number
+	minpix_threshold = 5000 #exclude imgs with min pixel value below this number
+
+
+        
+        #------
+        #Parameters for subtraction/optimization radius for LOCI
+        #------
+        radius_sub = 6
+        radius_op = 19
+
+        
+
+        #------
+        #arr_date_ShaneAO: array of date names in telescope directory
+        #index_date_targ: index of date in arr_date_ShaneAO
+        #------
+        print 'arr_date_ShaneAO', arr_date_ShaneAO
+        print 'date of target psf', date
+        index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
+        print 'index_date_targ', index_date_targ
+
+
+        
+        #------
+        #Ask for user input regarding which set to take as target psf
+        #Reads txt file in directory to know which files to use
+        #------
+        setnumb1 = str(setnumb1)
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+        arr_targpsf = np.arange(start1, end1+1)
+	print 'arr_targpsf', arr_targpsf
+        
+
+        
+        #------
+        #check for filter of 1st img in set
+        #------
+	filter_of_set = check_filter(start1, date) 
+        print 'filter_of_set', filter_of_set
+
+
+
+        #------
+        #open txt file with list of known binaries
+        #------
+        arr_bin = open(directory + '/' + directory + '_clearbinaries.txt', 'rb').read().splitlines()
+        arr_bin_dates = np.array(arr_bin[0::2])
+        arr_bin_setnumbs = np.array(arr_bin[1::2])
+        #print 'arr_bin_dates', arr_bin_dates
+        #print 'arr_bin_setnumbs', arr_bin_setnumbs
+        
+        
+        #------
+        # Add reference filenumbs from all dates
+        #------
+        arr_substar = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                total_sets = struct_ShaneAO_total_sets[date_ref]
+                print 'total_sets', total_sets
+                arr_substar_temp = np.array([]) #array for adding ref psf filenames
+                for setnumb2 in np.arange(1,total_sets+1):
+                        if setnumb2 == int(setnumb1) and index_date_targ == index_date:
+                                print date_ref, 'set', setnumb2, 'skipped'
+                                continue
+                        elif str(int(setnumb2)) in arr_bin_setnumbs:
+                                arr_index_setnumb_bin = np.where(arr_bin_setnumbs == str(int(setnumb2)))[0]
+                                #print arr_index_setnumb_bin
+                                '''
+                                print '------'
+                                print 'index_setnumb', index_setnumb
+                                print 'set number', setnumb2
+                                print 'corresponding date in txt file', arr_bin_dates[index_setnumb]
+                                print 'date in loop', date_ref
+                                '''
+                                for index_setnumb_bin in arr_index_setnumb_bin:
+                                        if arr_bin_dates[index_setnumb_bin] == date_ref:
+                                                print date_ref, 'set', setnumb2, 'skipped since it is a known binary'
+                                                continue
+                        else:
+                                ####date_ref and setnumb2
+                                #print 'adding elements in set no.', setnumb2, 'for date', date_ref
+                                arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
+                                start2 = int(arr_startend2[0])
+                                end2 = int(arr_startend2[1])
+                                arr_imgnumbs = np.arange(start2, end2+1)
+                                arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
+                                arr_temp = np.zeros(arr_imgnumbs.size)
+                                arr_temp.fill(setnumb2)
+                arr_substar_temp = arr_substar_temp.astype(int)
+                arr_substar.append(arr_substar_temp)
+        print 'arr_substar', arr_substar
+
+
+        
+        #------
+        # load reference imgs one by one
+        # Check filter, FWHM, max/min pixel values, img size
+        # Include only the ones within parameters set above at beginning of function
+        #------
+        arr_j = []
+        arr_img2 = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                arr_j_temp = []
+                arr_img2_temp = []
+                arr_substar_temp = arr_substar[index_date]
+                print 'arr_substar_temp', arr_substar_temp
+                for j in arr_substar_temp: #loop through ref imgs
+                        #print 'compiling img', j, 'for subtraction'
+                        arr_output = []
+                        arr_rss = np.array([])
+                        j_index = np.argwhere(arr_substar_temp == j)
+                        j_index = j_index[0]
+                        j_index = j_index[0]
+                        if j > 999:
+                                filename =  directory + '/' + date_ref  + '/s' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        print filename, 'doesnt exist'
+                                        continue
+                        else:
+                                filename =  directory + '/' + date_ref  + '/s0' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        print filename, 'doesnt exist'
+                                        continue
+
+                        img_filter = check_filter(j, date_ref)
+                        
+                        if img_filter != filter_of_set: #removing frames of different filter
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'img filter: ', img_filter, 'different from set filter:', filter_of_set
+                                continue
+                        elif maxpixval > maxpix_threshold or maxpixval < minpix_threshold: #removing frames with max pix values not within threshold
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'max pixel value of', maxpixval, 'not within allowed region'
+                                continue
+
+                        fwhm = get_fwhm(img2)
+                        if not fwhm: #remove frames that gaussian func couldn't fit
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                continue 
+                        elif fwhm > fwhm_threshold: #remove frames with large fwhm
+                                print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'FWHM greater than', fwhm_threshold
+                                continue
+                        arr_j_temp.append(int(j))
+                        img2 = img2.flatten() #change to 1D array
+                        
+                        if img2.size != 25921:
+                                print 'img2.shape', img2.shape
+                                print j, date_ref
+                        arr_img2_temp.append(img2)
+                arr_img2_temp = np.array(arr_img2_temp)
+                print 'arr_img2_temp.shape', arr_img2_temp.shape
+                arr_img2.append(arr_img2_temp)
+                arr_j.append(arr_j_temp)
+
+
+                
+        #------        
+        #Load array of filenumbs for ShaneAO, correlation matrix, and corresponding filenumbs in matrix
+        #------
+        filename_structShaneAOfilenumbs = 'struct_ShaneAO_filenumbs.p'
+        struct_ShaneAO_filenumbs = pickle.load(open(filename_structShaneAOfilenumbs, 'rb'))
+        filename_matrixcorr = 'matrix_corr.p'
+        matrix_corr = pickle.load(open(filename_matrixcorr, 'rb'))
+        filename_arrfilenumbscorr = 'arr_filenumbs_corr.p'
+        arr_filenumbs_corr = pickle.load(open(filename_arrfilenumbscorr, 'rb')).astype(int)
+        setnumb1 = int(setnumb1) #set numb for target psf img
+        arr_filenumbs = struct_ShaneAO_filenumbs[index_date_targ]
+
+
+        
+        #------
+        #Getting rid of frames of the same set in correlation matrix
+        #------
+        for element in arr_targpsf: 
+                index_i_chunk = np.argwhere(arr_filenumbs == element)
+                index_i_chunk = index_i_chunk[0][0]
+                print 'index_i_chunk', index_i_chunk
+                print 'check it', (index_date_targ*max_numb_imgs) + index_i_chunk
+                matrix_corr[:, (index_date_targ*max_numb_imgs) + index_i_chunk] = 100
+
+
+
+        #------
+        #Fill an array with indexes of dates coresponding to correlation matrix
+        #------
+        numb_dates = len(struct_ShaneAO_filenumbs)
+        arr_indexdate_corrs = np.zeros(numb_dates*max_numb_imgs)
+        for index_indexdatecorrs in np.arange(numb_dates):
+                arr_indexdate_corrs[index_indexdatecorrs*max_numb_imgs:(index_indexdatecorrs+1)*max_numb_imgs] = index_indexdatecorrs
+        arr_indexdate_corrs = arr_indexdate_corrs.astype(int)
+
+
+
+        #------
+        # Create list of structures with info for LOCI function
+        # Takes certain number of best imgs by referencing correlation matrix
+        #------
+        arr_pool_vars = []	
+        for index_i in np.arange(arr_targpsf.size):
+                arr_img2_optimal = []
+                arr_j_optimal = []
+                i = arr_targpsf[index_i] #file number of target img
+                index_i = np.argwhere(arr_filenumbs == i)[0][0]
+		arr_corrs = matrix_corr[(index_date_targ*max_numb_imgs) + index_i, :] #extract row in correlation matrix
+                index_sort_corr = np.argsort(arr_corrs) #sort row for best correlations
+                arr_indexdateoptimal = arr_indexdate_corrs[index_sort_corr] #corresponding sorted date indexes
+                arr_filenumbs_optimal = arr_filenumbs_corr[index_sort_corr] #corresponding sorted reference file numbers
+                arr_index_j_optimal = []
+                for index_optimal in np.arange(arr_filenumbs_optimal.size).astype(int):
+                        index_date_optimal = arr_indexdateoptimal[index_optimal]
+                        filenumb_optimal = arr_filenumbs_optimal[index_optimal]
+                        index_j_optimal = np.argwhere(arr_j[index_date_optimal] == filenumb_optimal)
+                        if index_j_optimal:
+                                arr_j_optimal.append(arr_j[index_date_optimal][index_j_optimal[0][0]])                                
+                                arr_img2_optimal.append(arr_img2[index_date_optimal][index_j_optimal[0][0]])
+                        if len(arr_j_optimal) >= numb_imgs_keep:
+                                break
+                arr_img2_optimal = np.array(arr_img2_optimal)
+                arr_img2_optimal = np.transpose(arr_img2_optimal)
+                #print 'arr_img2_optimal.shape', arr_img2_optimal.shape
+
+                struct = {'i': i, 'arr_img2': arr_img2_optimal, 'radius_sub': radius_sub, 'radius_op':radius_op, 'max_rad_img':max_rad_img, 'bin_cond':0}
+                arr_pool_vars.append(struct)
+
+        
+                                                        
+        #------
+        #Save/load list of structures as needed
+        #------
+        #filename_arrpoolvars = 'loci_arr_pool_vars_' + date + 'set' + str(int(setnumb1)) + '.p'        
+        #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb'))
+        #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb'))
+        
+        print '------------------------'
+	print 'No of loops to run:', len(arr_pool_vars)
+        print '------------------------'
+        print 'Now starting threads...'
+
+        
+
+        #------
+        #Run LOCI. Comment/uncomment sections for when thread is needed/not needed
+        #------
+        
+	for elem in arr_pool_vars:
+		theloci(elem)
+        
+        '''
+	threadnumb = 3
+	thepool = ThreadPool(threadnumb)
+        arr_pool = thepool.map(theloci, arr_pool_vars)
+        thepool.close()
+        thepool.join()
+        '''
         
 
         
@@ -1514,7 +2379,8 @@ def loci2(struct):
         radius_mock = struct['radius_mock']
         mock_factor = struct['mock_factor']
         theta_mock = struct['theta']
-        arr_rad = np.arange(1, 80-radius_op-1, radius_sub)
+        max_rad_img = struct['max_rad_img']
+        arr_rad = np.arange(1, 80, radius_sub)
         arr_rad = arr_rad.astype(int)
 
 
@@ -1525,10 +2391,10 @@ def loci2(struct):
         filename_imgmock = directory + '/' + date + '/' + str(i) + '_mockimg_mock_rad' + str(radius_mock) + '_' + 'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
         filename_imgsub = directory + '/' + date + '/' + str(i) + '_subimg_mock_rad' + str(radius_mock) + '_' + 'ratio' + str(mock_factor) +'_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
         filename_output = directory + '/' + date + '/' + str(i) + '_thread_mock_rad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radsub' + str(int(radius_sub)) + '_radop' + str(int(radius_op)) + '_theta' + str(int(theta_mock)) + '_.fits'
-        if exists(filename_imgmock) and exists(filename_imgsub) and exists(filename_output):
-                print 'skipping', i, ', radius:', radius_mock, ', flux ratio:', mock_factor, ', theta:', theta_mock
-                return 0
-        print i, ', radius:', radius_mock, ', flux ratio:', mock_factor, ', theta:', theta_mock
+        #if exists(filename_imgmock) and exists(filename_imgsub) and exists(filename_output):
+        #        print 'skipping', i, ', radius:', radius_mock, ', flux ratio:', mock_factor, ', theta:', theta_mock
+        #        return 0
+        print 'starting', i, ', radius:', radius_mock, ', flux ratio:', mock_factor, ', theta:', theta_mock, datetime.datetime.now().strftime('%m-%d %H:%M:%S')
 
 
 
@@ -1549,7 +2415,7 @@ def loci2(struct):
                 print 'deleted', filename_output_pickle
 
                 
-        
+
         #----------
         #load mock up binary and divide by predetermined factor
         #***Change centroid filename if necessary***
@@ -1590,8 +2456,10 @@ def loci2(struct):
                 else:
 			#print filename, 'doesnt exist'
                         return 0
+        y_length, x_length = img1.shape
+        center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
 
-
+        
 
         #--------
         #Add mock binary at correct radius & angle, save img as fits file
@@ -1619,8 +2487,22 @@ def loci2(struct):
         #--------|
         img_final = np.zeros(img1.size)
         for radi in arr_rad:
-                arr_radsub = np.arange(radi, radi+radius_sub) #array of starting radi of subtraction region
-                arr_radop = np.arange(radi, radi+radius_op) #array of starting radi of optimization region
+                #------
+                #array of starting radi of subtraction region
+                #------
+                if radi+radius_sub > max_rad_img:
+                        arr_radsub = np.arange(radi, max_rad_img)
+                else:
+                        arr_radsub = np.arange(radi, radi+radius_sub) 
+
+                #------
+                #array of starting radi of optimization region
+                #------
+                if radi+radius_op > max_rad_img:
+                        arr_radop = np.arange(radi, max_rad_img)
+                else:
+                        arr_radop = np.arange(radi, radi+radius_op)
+                        
                 img1op = np.array([])
                 arr_indexop = []
                 for rad_op in arr_radop: #creating target optimization annulus
@@ -1651,6 +2533,7 @@ def loci2(struct):
         img_output = img1 - img_final
 
 
+        img_output[center_index_y, center_index_x] = 0
         
         #------
         #Save final img, and img used for subtraction as fits files
@@ -1662,46 +2545,602 @@ def loci2(struct):
         hdu = pf.PrimaryHDU(img_output)
         hdulist = pf.HDUList([hdu])
         hdulist.writeto(filename_output, clobber = True)
-        
+
+        print 'done with', i, ', radius:', radius_mock, ', flux ratio:', mock_factor, ', theta:', theta_mock, datetime.datetime.now().strftime('%m-%d %H:%M:%S')
 	return 1
 
 
-'''loci2 correlation  code: DO NOT ERASE
-        
-        arr_img2transpose = np.copy(arr_img2.T)
-	for img2 in arr_img2transpose:
-		for rad_ring in np.arange(1, max_rad_ring+1):
-			arr_ringvals, arr_ringindex = return_ring(img1, rad_ring)
-			for ringindex in arr_ringindex:
-				ringindex = np.ravel_multi_index(ringindex, img1shape)
-				img2[ringindex] = 0
-				if counter == 0:
-					img1_corr[ringindex] = 0
-                                        count_points += 1
-		counter += 1
-		img_res = img1_corr - img2
-		sd_imgres = np.std(img_res)
-		arr_sd.append(sd_imgres)
 
-	numb_imgs_keep = 100 ###___ VARIABLE___ ###
-	index_sort_sd = np.argsort(arr_sd)
-	index_sort_sd = index_sort_sd[:numb_imgs_keep]
-	#print 'index_sort_sd.shape' + str(index_sort_sd.shape)
-
-	arr_img2 = arr_img2[:, index_sort_sd]
-	
-	#print 'arr_img2.shape updated' +  str(arr_img2.shape)
-	#useless = raw_input('what what')
+def theloci(struct):
+        #------
+        #load variables from input structure, create arr_rad with appropriate starting subtraction radii
+        #------
+        i = struct['i']
+	radius_sub = struct['radius_sub']
+	radius_op = struct['radius_op']
+	arr_img2 = struct['arr_img2']
+        max_rad_img = struct['max_rad_img']
+        len_filt_box = struct['len_filt_box']
+        arr_rad = np.arange(1, max_rad_img, radius_sub)
+        arr_rad = arr_rad.astype(int)
 
         
-        where0 = np.argwhere(arr_img2[:,0] == 0) #to check if masking worked. Not needed now.
-        print 'count_points', count_points
-	print 'numb of points where img2 is zero', where0.size
-        hdu = pf.PrimaryHDU(img1)
+        
+        #------
+        #define filename for final img
+        #------
+        if struct['bin_cond']:
+                radius_mock = struct['rad_mock']
+                mock_factor = struct['fluxratio']
+                theta_mock = struct['theta_mock']
+                filename_output = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #!!!!!!***filt Change name if not using filt
+                print 'starting', i, 'radius mock:', radius_mock, ',', 'theta', theta_mock, '...', datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+        else:
+                filename_output = directory + '/' + date + '/' + str(i) + 'locifiltfinal' + '.fits'#!!!!!!***filt Change name if not using filt
+                print 'starting', i, '...', datetime.datetime.now().strftime('%m-%d %H:%M:%S)')
+
+
+                                                                             
+        #if exists(filename_output):
+        #        print 'skipping', filename_output
+        #        return 0
+
+        
+        #------
+        #load target img, divide by max pixel value
+        #------
+        if i > 999:
+                filename = directory + '/' + date  + '/s' + str(int(i)) + '_reduced_centered.fits'
+                if exists(filename):
+                        try:
+                                img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1)
+                        except:
+                                print 'error opening file:', filename
+                                return 0
+                else:
+			#print filename, 'doesnt exist'
+                        return 0
+        else:
+                filename =  directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
+                if exists(filename):
+                        try:
+                                img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1)
+                        except:
+                                print 'error opening file:', filename                                
+                                return 0
+                else:
+			#print filename, 'doesnt exist'
+                        return 0
+        y_length, x_length = img1.shape
+        center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
+
+
+
+        #------
+        # inject mock binary if needed
+        #------
+        if struct['bin_cond']:
+                #print 'Injecting mock binaries', datetime.datetime.now().strftime('%m-%d %H:%M:%S)')
+                                
+                #----------
+                #load mock binary and divide by predetermined factor
+                #***Change centroid filename if necessary***
+                #----------
+                img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
+                img_mock /= np.amax(img_mock)
+                if mock_factor != 0:
+                        img_mock *= float(mock_factor)
+                        
+
+                #--------
+                #Add mock binary at correct radius & angle, save img as fits file
+                #--------
+                if radius_mock != 0:
+                        dx_mock = radius_mock*np.cos(theta_mock*(2*np.pi)/360) #calculating y displacement from center
+                        dx_mock = int(round(dx_mock))
+                        dy_mock = radius_mock*np.sin(theta_mock*(2*np.pi)/360) #calculating x displacement from center
+                        dy_mock = int(round(dy_mock))
+        
+                        img_mock = np.fft.fft2(img_mock) #Fourier shift to construct binary
+                        img_mock = fshift(img_mock, [dy_mock, dx_mock])
+                        img_mock = np.fft.ifft2(img_mock)
+                        img_mock = np.real(img_mock)
+
+                        img1 += img_mock
+        
+        #print 'done injecting mocks', datetime.datetime.now().strftime('%m-%d %H:%M:%S)')
+
+
+        #------
+        # Perform high-pass median filter on target img & reference imgs before LOCI subtraction.
+        #------
+        img_sub_mdn = medfilt(img1, [len_filt_box, len_filt_box]) #take median filter of target img
+        img1 -= img_sub_mdn
+        
+
+
+        #--------|
+        #  LOCI  |
+        #--------|
+        img_final = np.zeros(img1.size)
+        for radi in arr_rad:
+                #------
+                #array of starting radi of subtraction region
+                #------
+                if radi+radius_sub > max_rad_img:
+                        arr_radsub = np.arange(radi, max_rad_img)
+                else:
+                        arr_radsub = np.arange(radi, radi+radius_sub) 
+
+                #------
+                #array of starting radi of optimization region
+                #------
+                if radi+radius_op > max_rad_img:
+                        arr_radop = np.arange(radi, max_rad_img)
+                else:
+                        arr_radop = np.arange(radi, radi+radius_op)
+                        
+                img1op = np.array([])
+                arr_indexop = []
+                for rad_op in arr_radop: #creating target optimization annulus
+			arr_ringop, indexop = return_ring(img1, rad_op)			
+                        for element in indexop:
+                                arr_indexop.append(np.ravel_multi_index(element, img1.shape))
+                        img1op = np.append(img1op, arr_ringop)
+                img1sub = np.array([])
+                arr_indexsub = []
+                for rad_sub in arr_radsub: #creating target subtraction annulus
+                        arr_ringsub, indexsub = return_ring(img1, rad_sub)
+                        for element in indexsub:
+                                arr_indexsub.append(np.ravel_multi_index(element, img1.shape))
+                        img1sub = np.append(img1sub, arr_ringsub)
+		arr_refop = arr_img2[np.array(arr_indexop)]
+
+                #Linear Least Squares fitting
+                Y = img1op.reshape([-1,1])
+                X = arr_refop
+                alpha = np.dot(np.transpose(X), X)
+                beta = np.dot(np.transpose(X), Y)
+                coeffs = np.dot(np.linalg.inv(alpha), beta)
+		coeffs = coeffs.reshape([-1,1])
+		img_fill_annulus = np.dot(arr_img2, coeffs)
+                for coord_annulus in arr_indexsub:
+                        img_final[coord_annulus] = img_fill_annulus[coord_annulus]
+	img_final = img_final.reshape(img1.shape)
+        img_output = img1 - img_final
+
+
+        img_output[center_index_y, center_index_x] = 0
+        
+        #------
+        #Save final img as fits file
+        #------
+        hdu = pf.PrimaryHDU(img_output)
         hdulist = pf.HDUList([hdu])
-        hdulist.writeto('test.fits', clobber = True)
-        subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)	
-'''
+        hdulist.writeto(filename_output, clobber = True)
+
+        print 'done with', filename_output, '...', datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+	return 1
+
+
+def create_final_loci_mockbins():
+        startset = 1
+        arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        print 'arr_radiusmock', arr_radiusmock
+        arr_theta = np.arange(0, 360, 60).astype(int)
+        print 'arr_theta', arr_theta
+
+        for setnumb1 in arr_setnumbs:
+                print '------'
+                print setnumb1
+                print '------'
+                arr_startend1 = open(directory + '/' + date + '/set_'+ str(int(setnumb1)) +'_info.txt', 'rb').read().splitlines()
+                start1 = int(arr_startend1[0])
+                end1 = int(arr_startend1[1])
+                arr_targpsf = np.arange(start1, end1+1)
+
+                for theta_mock in arr_theta:
+                        for radius_mock in arr_radiusmock:
+
+                                arr_for_mdn = []
+                                filename_output = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
+                                for i in arr_targpsf:
+                                        filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
+                                        try:
+                                                with pf.open(filename_input) as f_temp:
+                                                        img = f_temp[0].data
+                                        except:
+                                                print filename_input, 'doesnt exist', 'from set:', setnumb1
+                                                continue
+                                        arr_for_mdn.append(img)
+                                print 'images for mdn:',len(arr_for_mdn)
+                                img_final = np.median(np.array(arr_for_mdn), axis = 0)
+
+                                hdu = pf.PrimaryHDU(img_final)
+                                hdulist = pf.HDUList([hdu])
+                                hdulist.writeto(filename_output, clobber=True)
+
+def save_fits(arr, filename):
+#Inputs are: array for saving to fit & filename for fits.
+#------
+        hdu = pf.PrimaryHDU(arr)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename, clobber=True)
+
+
+
+def plot_detlim_loci():
+
+        #------
+        #Define radius of aperture
+        #------
+        radi_apert = 3
+
+
+        startset = 1
+        arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
+        
+
+        #------
+        # define mock binary radii
+        # save to fits file
+        #------
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        filename_arrradiusmock = directory + '/' + date + '/' + 'arr_radiusmock.fits'
+        save_fits(arr_radiusmock, filename_arrradiusmock)
+        print 'arr_radiusmock', arr_radiusmock
+
+        arr_theta = np.arange(0, 360, 60).astype(int)
+        print 'arr_theta', arr_theta
+
+        arr_5sd_correct = []
+        filename_arr5sdcorrectfits = directory + '/' + date + '/' + 'arr_5sd_correct.fits'
+        for setnumb1 in arr_setnumbs:
+                print '------'
+                print 'set', setnumb1
+                print '------'
+
+
+                #------
+                #Open LOCI-subtracted, medianed img for set number
+                #------
+                filename_fits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_locifiltfinal.fits'
+                #filename_fits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_locifinal.fits'
+                img_subed = pf.open(filename_fits)[0].data
+                
+
+                #------
+                # Open pre-subtraction, medianed img for set number
+                # Obtain flux of aperture around primary
+                #------
+                filename_avg = directory + '/' + date + '/' + 'centroid_' + str(int(setnumb1)) + '.fits'
+                img_avg = pf.open(filename_avg)[0].data
+                img_avg /= np.amax(img_avg)
+                y_length_avg, x_length_avg = img_avg.shape
+                y_index_center_avg = int((y_length_avg - 1)/2)
+                x_index_center_avg = int((x_length_avg - 1)/2)
+                flux_main = get_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
+                print 'flux_main', flux_main
+
+
+                #------
+                # Get 5 sigma values for flux of apertures for pre-subtracted, mdn-ed img
+                #------
+                arr_5sd_pre = []
+                arr_flux_bin_pre = []
+                for rad_mock in arr_radiusmock:
+                        arr_index_pre = get_indexap_annulus(rad_mock, radi_apert)
+                        arr_5sd_radi_pre = []
+                        for elem in arr_index_pre:
+                                y_apert_center_pre = elem[0] + y_index_center_avg
+                                x_apert_center_pre = elem[1] + x_index_center_avg
+                                array_flux_apert_radi_pre = get_flux_aperture(img_avg, [y_apert_center_pre, x_apert_center_pre], radi_apert)
+                                arr_5sd_radi_pre.append(array_flux_apert_radi_pre)
+                        
+                        sd_ring_pre = np.std(np.array(arr_5sd_radi_pre))
+                        arr_5sd_pre.append(sd_ring_pre*5)
+                arr_mag_5sd_pre = 2.5*np.log10(flux_main/np.array(arr_5sd_pre))
+                
+
+
+                #------
+                #Iterate through radii for mock binaries
+                #Check medianed, LOCI-subtracted img(without binary) for 5 sigma value at that radius
+                #Create array of corresponding flux ratio
+                #------
+
+
+
+                #################
+                # TESTING APERTURES AROUND ANNULI
+                '''
+                for rad_mock in arr_radiusmock:
+                        img_test = np.zeros([160, 160])
+                        arr_index = get_indexap_annulus(rad_mock, radi_apert)
+                        print 'arr_index', arr_index
+                        for elem in arr_index:
+                                y = elem[0] + y_index_center_avg
+                                x = elem[1] + x_index_center_avg
+                                img_test = test_get_flux_aperture(img_test, [y,x], radi_apert)
+                        hdu = pf.PrimaryHDU(img_test)
+                        hdulist = pf.HDUList([hdu])
+                        hdulist.writeto('test.fits', clobber=True)
+                        subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)    
+                '''
+                ###################
+
+
+                #------
+                # Run get_flux_aperture to find number of pixels in aperture
+                #------
+                img_zeros = np.zeros(img_subed.shape)
+                arr_empty_apert = get_flux_aperture(img_zeros, [y_index_center_avg, x_index_center_avg], radi_apert, True)
+                num_pix_apert = len(arr_empty_apert)
+
+
+
+
+
+                arr_5sd = []
+                arr_flux_bin_init = []
+                for rad_mock in arr_radiusmock:
+                        arr_index = get_indexap_annulus(rad_mock, radi_apert)
+                        arr_flux_radi = []
+                        for elem in arr_index:
+                                y_apert_center = elem[0] + y_index_center_avg
+                                x_apert_center = elem[1] + x_index_center_avg
+                                array_flux_apert_radi = get_flux_aperture(img_subed, [y_apert_center, x_apert_center], radi_apert)
+                                arr_flux_radi.append(array_flux_apert_radi)
+                        sd_ring = np.std(np.array(arr_flux_radi))
+                        arr_5sd.append(sd_ring*5)
+
+                        struct_ring = check_ring(img_subed, rad_mock)
+                        sd_ring = struct_ring['sd_ring']
+                        mock_factor = sd_ring*50
+                        img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
+                        img_mock /= np.amax(img_mock)
+                        img_mock *= float(mock_factor)
+                        flux_bin_init = get_flux_aperture(img_mock, [y_index_center_avg, x_index_center_avg], radi_apert)
+                        arr_flux_bin_init.append(flux_bin_init)
+                        
+                arr_flux_bin_init = np.array(arr_flux_bin_init)
+                arr_fluxratio_init = flux_main/arr_flux_bin_init
+                arr_mag_5sd = 2.5*np.log10(flux_main/np.array(arr_5sd))                        
+
+                counter = 0
+                arr_avg_fluxbin = []
+                arr_mag_sd = []
+                for radius_mock in arr_radiusmock: #iterate through different radii from center
+                        arr_delflux = []
+                        arr_fluxbin_r = []
+                        arr_flux_thetas_r = []
+                        for theta_mock in arr_theta: #iterate through different position angles
+
+                                #------
+                                # Open image with mock binary after loci subtraction
+                                # If file doesn't exist, skip img
+                                #------
+                                filename_final = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits'
+                                if exists(filename_final):
+                                        try:
+                                                img_final = pf.open(filename_final)[0].data
+                                                counter += 1
+                                        except:
+                                                print 'error opening:', filename_final
+                                                subprocess.call('rm -rf ' + filename_final, shell = True)
+                                                continue
+                                else:
+                                        print 'File not found:', filename_final
+                                        continue
+
+
+
+                                #------
+                                # find x and y index at center of image
+                                # then use radius_mock and theta_mock to get index of mock binary
+                                #------
+                                y_length, x_length = img_final.shape
+                                y_index_center = int((y_length - 1)/2)
+                                x_index_center = int((x_length - 1)/2)
+
+                                dx_mock = radius_mock*np.cos(theta_mock*(2*np.pi)/360)
+                                dx_mock = int(round(dx_mock))
+                                dy_mock = radius_mock*np.sin(theta_mock*(2*np.pi)/360)
+                                dy_mock = int(round(dy_mock))
+
+                                y_index_bin = y_index_center + dy_mock
+                                x_index_bin = x_index_center + dx_mock
+                                flux_bin = get_flux_aperture(img_final, [y_index_bin, x_index_bin], radi_apert)
+                                arr_fluxbin_r.append(flux_bin)
+                        
+                        arr_avg_fluxbin.append(np.mean(arr_fluxbin_r))
+                        arr_mag_fluxbin_r = 2.5*np.log10(flux_main/arr_fluxbin_r)
+                        sd_r = np.std(arr_mag_fluxbin_r)
+                        arr_mag_sd.append(sd_r)
+
+                arr_fluxratio_final = flux_main/arr_avg_fluxbin
+                arr_mag_init = 2.5*np.log10(arr_fluxratio_init)
+                arr_mag_final = 2.5*np.log10(arr_fluxratio_final)
+                arr_mag_diff = arr_mag_final - arr_mag_init
+                print 'arr_mag_diff', arr_mag_diff
+                print 'arr_mag_sd', arr_mag_sd
+                print '-------'
+
+                mag_pre, = plt.plot(arr_radiusmock, arr_mag_5sd_pre, 'ko-')
+                mag_init, = plt.plot(arr_radiusmock, arr_mag_init, 'bo-')
+                mag_afterloci, = plt.plot(arr_radiusmock, arr_mag_final, 'ro-')
+                mag_5sd, = plt.plot(arr_radiusmock, arr_mag_5sd,'yo-')
+                mag_5sd_correct, = plt.plot(arr_radiusmock, arr_mag_5sd - arr_mag_diff,'go-')
+                plt.errorbar(arr_radiusmock, arr_mag_5sd - arr_mag_diff, yerr = arr_mag_sd, ecolor = 'g')
+                plt.gca().invert_yaxis()
+                plt.legend([mag_pre, mag_init, mag_afterloci, mag_5sd, mag_5sd_correct], ['5 s.d. value before subtraction', 'Magnitude of mock binary before injection', 'Magnitude of binary after LOCI', '5 s.d. value before correction', '5 s.d. value after correction'])
+
+                #-----
+                # Append corrected 5sd plots to rows in a table. Save as fits file.
+                #-----
+                if counter > 50:
+                        arr_5sd_correct.append(arr_mag_5sd - arr_mag_diff)
+                print 'number of images used:', counter
+                plt.show()
+
+        hdu = pf.PrimaryHDU(np.array(arr_5sd_correct))
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename_arr5sdcorrectfits, clobber=True)
+
+
+def plot_all_5sd():
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        arr_5sd = pf.open('ShaneAO/Jun15/arr_5sd_correct.fits')[0].data
+        for row_index in np.arange(len(arr_5sd)):
+                plt.plot(arr_radiusmock, arr_5sd[row_index, :], 'o-')                        
+        plt.gca().invert_yaxis()
+        plt.show()
+
+
+
+def get_indexap_annulus(radi_annulus, radi_apert):
+        #------
+        # Input: Distance from center of image at which to center apertures, aperture radius
+        #------
+        # Output: Array of indices. These indices are the y & x coordinates of aperture centers
+        #------
+
+
+        theta_incr = math.acos(1 - (((radi_apert+0.55)**2.)/(2*((radi_annulus)**2.))))
+        theta_incr *= 2
+        #print '-----'
+        #print 'theta_increase(degrees)', theta_incr*180/math.pi
+
+
+        arr_index = []
+        theta_prev = -1*math.pi
+        theta_loop = -1*math.pi + theta_incr
+        arr_index.append([0, -1*radi_annulus])
+        cond_incircle = True
+        while cond_incircle:
+                #print 'theta_loop', theta_loop*180/math.pi
+                index_y = radi_annulus*math.sin(theta_loop)
+                index_y_int = round(index_y)
+                index_x = radi_annulus*math.cos(theta_loop)
+                index_x_int = round(index_x)
+                arr_coord = [(y, x) for y in np.arange(index_y_int - 2, index_y_int + 2 + 1).astype(int) for x in np.arange(index_x_int - 2, index_x_int + 2 + 1).astype(int)]
+                #print 'arr_coord', arr_coord
+                arr_dist = []
+                for coord in arr_coord:
+                        y = coord[0]
+                        x = coord[1]
+                        dist = distance(y, index_y, x, index_x)
+                        arr_dist.append(dist)
+                cond_safetheta = False
+                counter = 0 ####
+                while not cond_safetheta:
+                        index_min = arr_dist.index(min(arr_dist))
+                        min_y = arr_coord[index_min][0]
+                        min_x = arr_coord[index_min][1]
+                        #print 'min_y', min_y, 'min_x', min_x
+                        theta_min = math.atan2(min_y,min_x)
+                        #print 'theta_min_index(degrees)', theta_min*180/math.pi
+                        #print 'theta_min', theta_min*180/math.pi
+                        #print 'theta_prev', theta_prev*180/math.pi                                
+                        if theta_min < 0 and theta_prev > 0:
+                                break
+                        safe_theta = theta_min - theta_prev > theta_incr                        
+                        #print 'safe theta? :', safe_theta
+                        safe_radi = radi_annulus - 0.5 < distance(min_y, 0, min_x, 0) < radi_annulus + 0.5
+                        #print 'safe radi? :', safe_radi
+                        if safe_theta and safe_radi:
+                                cond_safetheta = True
+                        else:
+                                'change in angle not large enough, next.'
+                                arr_dist[index_min] = 10
+                arr_index.append([index_y_int, index_x_int])
+                #print 'theta_min', theta_min*180/math.pi
+                #print 'theta_prev', theta_prev*180/math.pi                                
+                theta_loop = theta_min + theta_incr
+                theta_prev = theta_min
+                if math.pi - theta_loop < theta_incr:
+                        cond_incircle = False
+        return arr_index
+
+
+        
+
+
+
+
+
+def get_flux_aperture(img, index, radi_ap, ret_array=False):
+        #Inputs: image(2d array), indexes(2-element(y,x) array), radius of aperture(number)
+        #Returns: total flux in aperture
+        #------
+
+
+
+        #------
+        #deciphering inputs
+        #------
+        index_y = index[0]
+        index_x = index[1]
+        j = radi_ap
+
+
+
+        #------
+        #Knowing index of peak, take aperture of j pixel around this point
+        #save total flux of aperture
+        #------
+        arr_totflux = []
+        for x_circ in np.arange((2*j) + 1) - j:
+                for y_circ in np.arange((2*j) + 1) - j:
+                        if distance(x_circ, 0, y_circ, 0) < (j+0.5):
+                                if index_y + y_circ >= img.shape[0] or index_x + x_circ >= img.shape[1]:
+                                        continue
+                                else:
+                                        arr_totflux.append(img[index_y+y_circ, index_x+x_circ])
+
+        tot_flux = sum(arr_totflux)
+        if ret_array:
+                return arr_totflux
+        else:
+                return tot_flux
+
+
+def test_get_flux_aperture(img, index, radi_ap):
+        #Inputs: image(2d array), indexes(2-element(y,x) array), radius of aperture(number)
+        #Returns: total flux in aperture
+        #------
+
+
+
+        #------
+        #deciphering inputs
+        #------
+        index_y = index[0]
+        index_x = index[1]
+        j = radi_ap
+
+
+
+        #------
+        #Knowing index of peak, take aperture of j pixel around this point
+        #save total flux of aperture
+        #------
+        arr_totflux = []
+        for x_circ in np.arange((2*j) + 1) - j:
+                for y_circ in np.arange((2*j) + 1) - j:
+                        if distance(x_circ, 0, y_circ, 0) < (j+0.5):
+                                if index_y + y_circ >= img.shape[0] or index_x + x_circ >= img.shape[1]:
+                                        continue
+                                else:
+                                        img[index_y+y_circ, index_x+x_circ] += 1
+
+        return img
+
+
+
 
 def outdated_RunKlip(total_sets = total_sets):
         
@@ -1878,32 +3317,23 @@ def outdated_RunKlip(total_sets = total_sets):
 
 
 
-def run_klip2():
+        
+
+def run_theklip():
         #-------
         #Define parameters
         #------
         numb_imgs_keep = 600 #number of imgs to keep from correlation matrix
         numb_pixels_all_imgs = 25921 #number of pixels in all imgs
         max_rad_img = 80 # max radius in imgs
-        rad_annulus = 5 # radius of annulus for KLIP search rings
+        rad_annulus = 10 # radius of annulus for KLIP search rings
         fwhm_threshold = 10 # upper limit on full-width-half-max
 	maxpix_threshold = 35000 # exclude imgs with pixel values above this number
 	minpix_threshold = 5000 # exclude imgs with pixel values below this number
-        arr_klipmodes = np.arange(5, 50, 5).astype(int) # array with number of klip modes to try
+        arr_klipmodes = np.array([15, 25, 35]).astype(int) # array with number of klip modes to try
 
 
         
-	#------
-        #Define mock-up binary arrays
-        #------
-        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int)
-        print 'arr_radiusmock', arr_radiusmock
-        arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000])
-        print 'arr_mockfactor', arr_mockfactor
-        arr_theta = np.array([0])
-        print 'arr_theta', arr_theta
-
-
 
         #------
         #arr_date_ShaneAO: array of date names in telescope directory
@@ -1926,16 +3356,32 @@ def run_klip2():
         end1 = int(arr_startend1[1])
         arr_targpsf = np.arange(start1, end1+1)
         print 'arr_targpsf', arr_targpsf
+
+
         
+        #------
+        #open txt file with list of known binaries
+        #------
+        arr_bin = open(directory + '/' + directory + '_clearbinaries.txt', 'rb').read().splitlines()
+        arr_bin_dates = np.array(arr_bin[0::2])
+        arr_bin_setnumbs = np.array(arr_bin[1::2])
+        #print 'arr_bin_dates', arr_bin_dates
+        #print 'arr_bin_setnumbs', arr_bin_setnumbs
+
+
+
+        #------
+        #check for filter of 1st img in set
+        #------
+	filter_of_set = check_filter(start1, date) 
+        print 'filter_of_set', filter_of_set
+
 
         
         #------
         # Add reference filenumbs from all dates
         #------
-	filter_of_set = check_filter(start1, date) #check for filter of 1st img in set
-        print 'filter_of_set', filter_of_set
         arr_substar = []
-        print 'setnumb1', int(setnumb1)
         for index_date in np.arange(len(arr_date_ShaneAO)):
                 date_ref = arr_date_ShaneAO[index_date]
                 total_sets = struct_ShaneAO_total_sets[date_ref]
@@ -1943,17 +3389,33 @@ def run_klip2():
                 arr_substar_temp = np.array([]) #array for adding ref psf filenames
                 for setnumb2 in np.arange(1,total_sets+1):
                         if setnumb2 == int(setnumb1) and index_date_targ == index_date:
-                                print 'index_date_targ', index_date_targ, 'i.e.', date_ref, 'set', setnumb2, 'skipped'
+                                print date_ref, 'set', setnumb2, 'skipped'
                                 continue
+                        elif str(int(setnumb2)) in arr_bin_setnumbs:
+                                arr_index_setnumb_bin = np.where(arr_bin_setnumbs == str(int(setnumb2)))[0]
+                                #print arr_index_setnumb_bin
+                                '''
+                                print '------'
+                                print 'index_setnumb', index_setnumb
+                                print 'set number', setnumb2
+                                print 'corresponding date in txt file', arr_bin_dates[index_setnumb]
+                                print 'date in loop', date_ref
+                                '''
+                                for index_setnumb_bin in arr_index_setnumb_bin:
+                                        if arr_bin_dates[index_setnumb_bin] == date_ref:
+                                                print date_ref, 'set', setnumb2, 'skipped since it is a known binary'
+                                                continue
                         else:
-                                print 'adding elements in set no.', setnumb2, 'for date', date_ref
+                                ####date_ref and setnumb2
+                                #print 'adding elements in set no.', setnumb2, 'for date', date_ref
                                 arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
                                 start2 = int(arr_startend2[0])
                                 end2 = int(arr_startend2[1])
                                 arr_imgnumbs = np.arange(start2, end2+1)
                                 arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
+                                arr_temp = np.zeros(arr_imgnumbs.size)
+                                arr_temp.fill(setnumb2)
                 arr_substar_temp = arr_substar_temp.astype(int)
-                print 'arr_setnumb_temp', arr_setnumb_temp
                 arr_substar.append(arr_substar_temp)
         print 'arr_substar', arr_substar
 
@@ -2069,6 +3531,7 @@ def run_klip2():
         # Create list of structures with info for klip
         # Takes certain number of best imgs by referencing correlation matrix
         #------
+        print 'Now creating arr_pool_vars, for feeding into KLIP function'
         arr_pool_vars = []	
         for index_i in np.arange(arr_targpsf.size):
                 arr_j_optimal = []
@@ -2076,12 +3539,12 @@ def run_klip2():
                 i = arr_targpsf[index_i]
                 print i
                 index_i = np.argwhere(arr_filenumbs == i)[0][0]
-                print 'index_i', index_i
+                #print 'index_i', index_i
 		arr_corrs = matrix_corr[(index_date_targ*max_numb_imgs) + index_i, :]
                 index_sort_corr = np.argsort(arr_corrs)
-                print 'index_sort_corr', index_sort_corr
+                #print 'index_sort_corr', index_sort_corr
                 arr_indexdateoptimal = arr_indexdate_corrs[index_sort_corr]
-                print 'arr_indexdateoptimal', arr_indexdateoptimal
+                #print 'arr_indexdateoptimal', arr_indexdateoptimal
                 arr_filenumbs_optimal = arr_filenumbs_corr[index_sort_corr]
                 arr_index_j_optimal = []
                 for index_optimal in np.arange(arr_filenumbs_optimal.size).astype(int):
@@ -2105,85 +3568,485 @@ def run_klip2():
                         mean_row = np.mean(arr_img2_optimal[index_row])
                         arr_img2_optimal[index_row] -=  mean_row
                         
-                print 'mean of arr_img2_optimal should be zero:'
-                print 'np.mean(arr_img2_optimal):', np.mean(arr_img2_optimal)
-                for radius_mock in arr_radiusmock: # create list of structures
-                        for mock_factor in arr_mockfactor:
-                                for theta in arr_theta:
-                                        for numb_klip_modes in arr_klipmodes:
-                                                struct = {'filenumb_img1': i, 'arr_img2': arr_img2_optimal, 'date_ref': date_ref, 'numb_klip_modes':numb_klip_modes, 'max_rad_img': max_rad_img, 'rad_annulus': rad_annulus, 'radius_mock':radius_mock, 'mock_factor': mock_factor, 'theta': theta}
-                                                arr_pool_vars.append(struct)
-
+                #print 'mean of arr_img2_optimal should be nearly zero:'
+                #print 'np.mean(arr_img2_optimal):', np.mean(arr_img2_optimal)
+                for numb_klip_modes in arr_klipmodes:
+                        struct = {'filenumb_img1': i, 'arr_img2': arr_img2_optimal, 'date_ref': date_ref, 'numb_klip_modes':numb_klip_modes, 'max_rad_img': max_rad_img, 'rad_annulus': rad_annulus}
+                        arr_pool_vars.append(struct)
                                                 
-
+        
+                                                
         #------
         # save/load list of structures as needed
         #------
         filename_arrpoolvars = 'klip_arr_pool_vars_' + date + 'set' + str(int(setnumb1)) + '.p'
-        pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb')) #saves list of structures
         #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb')) #loads list of structures
 
+        print '------------------------'
+	print 'No of loops to run:', len(arr_pool_vars)
+        print '------------------------'
+        #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb')) #saves list of structures
+        
 
 
         #------
         # run KLIP
         #------
-        print '------------------------'
-	print 'No of loops to run:', len(arr_pool_vars)
-        print '------------------------'
         print 'Now starting threads...'
-
-	for elem in arr_pool_vars:
-		klip(elem)
         
-	'''
+	for elem in arr_pool_vars:
+		theklip(elem)
+        
+        '''
 	threadnumb = 6
 	thepool = ThreadPool(threadnumb)
         arr_pool = thepool.map(klip, arr_pool_vars)
         thepool.close()
         thepool.join()
         '''
-        
-def create_cube_klip():
-        arr_klipmodes = np.arange(5, 50, 5)
-        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int) #np.arange(15, 60+1, 15).astype(int)
-        print 'arr_radiusmock', arr_radiusmock
-        arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000])#np.arange(100, 200+1, 50).astype(int)
-        print 'arr_mockfactor', arr_mockfactor
-        arr_theta = np.array([0]) #np.arange(0, 360, 60).astype(int)
-        print 'arr_theta', arr_theta
 
-        #---------------
-        #ask for user input regarding which set to take as target psf
-        #reads txt file in directory to know which files to use
+        
+
+
+        
+def theklip(struct):
+        #------
+        #Extract variables from input structure
+        #------
+        filenumb_img1 = struct['filenumb_img1']
+        arr_img2 = struct['arr_img2']
+        date_ref = struct['date_ref']
+        numb_klip_modes = struct['numb_klip_modes']
+        max_rad_img = struct['max_rad_img']
+        rad_annulus = struct['rad_annulus']
+
+        arr_radstarts = np.arange(1, max_rad_img+1, rad_annulus)
+        print 'starting:', filenumb_img1, 'kmode', int(numb_klip_modes), datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+
+
+        
+        #-------
+        # Define filenames of fits files
+        # Exit function if files already exist
+        # CHANGE FILENAMES IF NECESSARY        
+        #-------
+        filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '.fits'
+
+        
+
+        #---------------------------
+        #loading target img, divide by max pixel value
+        #---------------------------        
+        if filenumb_img1 > 999:
+                filename = directory + '/' + date_ref + '/' + 's' + str(filenumb_img1) + '_reduced_centered.fits'
+                if exists(filename):
+                        img1 = pf.open(filename)[0].data
+                        maxpixval = np.amax(img1)
+                        img1 /= maxpixval
+                else:
+                        print filename, 'does not exist'
+                        return 0
+        else:
+                filename = directory + '/' + date_ref + '/' + 's0' + str(filenumb_img1) + '_reduced_centered.fits'
+                if exists(filename):
+                        img1 = pf.open(filename)[0].data
+                        maxpixval = np.amax(img1)
+                        img1 /= maxpixval
+                else:
+                        print filename, 'does not exist'
+                        return 0
+
+
+                
+        #----------
+        #flatten img and save img shape
+        #----------
+        img1shape = img1.shape
+        img1_flat = img1.flatten()
+        radi = 0
+
+
+
+        #----------|
+        #   KLIP   |
+        #----------|
+        img_sub = np.zeros(img1_flat.shape)
+        img_final = np.zeros(img1_flat.shape)
+        for index_rad in np.arange(arr_radstarts.size - 1).astype(int):
+                arr_ringindex = []
+                radi = arr_radstarts[index_rad]
+                radi_next = arr_radstarts[index_rad+1]
+                while radi < radi_next:
+                        ringvals, arr_ringindex_temp = return_ring(img1, radi)
+                        for ringindex in arr_ringindex_temp:
+                                ringindex = np.ravel_multi_index(ringindex, img1shape)
+                                arr_ringindex.append(ringindex)
+                        radi += 1
+                #print 'len(arr_ringindex)', len(arr_ringindex)
+                arr_img2_S = arr_img2[:, arr_ringindex]
+                img1_ring = img1_flat[arr_ringindex]
+
+                basis = get_klip_basis(arr_img2_S, numb_klip_modes)
+                tZ_dot_Z = np.dot(np.transpose(basis), basis)
+                img_sub_ring = np.dot(img1_ring, tZ_dot_Z)
+                img_final_ring = img1_ring - img_sub_ring        
+                for index_area in np.arange(len(arr_ringindex)).astype(int):
+                        index_ring = arr_ringindex[index_area]
+                        img_final[index_ring] = img_final_ring[index_area]
+                        img_sub[index_ring] = img_sub_ring[index_area]
+
+
+                        
+        #------
+        #Save final img, subtraction img as fits files
+        #------
+        hdu = pf.PrimaryHDU(img_final.reshape(img1shape))
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename_output, clobber=True)
+        
+
+        print 'created:', filename_output
+        print 'done with:', filenumb_img1, 'kmode', int(numb_klip_modes), datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+        return 1
+
+
+
+def run_klip2():
+        #-------
+        #Define parameters
+        #------
+        numb_imgs_keep = 600 #number of imgs to keep from correlation matrix
+        numb_pixels_all_imgs = 25921 #number of pixels in all imgs
+        max_rad_img = 80 # max radius in imgs
+        rad_annulus = 10 # radius of annulus for KLIP search rings
+        fwhm_threshold = 10 # upper limit on full-width-half-max
+	maxpix_threshold = 35000 # exclude imgs with pixel values above this number
+	minpix_threshold = 5000 # exclude imgs with pixel values below this number
+        arr_klipmodes = np.array([15, 25, 35]).astype(int) # array with number of klip modes to try
+
+
+        
+	#------
+        #Define mock-up binary arrays
+        #------
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int)
+        print 'arr_radiusmock', arr_radiusmock
+        arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000])
+        print 'arr_mockfactor', arr_mockfactor
+        arr_theta = np.array([0])
+        print 'arr_theta', arr_theta
+        
+
+
+        #------
+        #arr_date_ShaneAO: array of date names in telescope directory
+        #index_date_targ: index of date in arr_date_ShaneAO
+        #------
+        print 'arr_date_ShaneAO', arr_date_ShaneAO
+        print 'date of target psf', date
+        index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
+        print 'index_date_targ', index_date_targ
+
+
+        
+        #------
+        # Ask for user input regarding which set to take as target psf
+        # Reads txt file in directory to know which files to use
+        #------
         setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
         arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
         start1 = int(arr_startend1[0])
         end1 = int(arr_startend1[1])
-	arr_targpsf = np.arange(start1, end1+1)
+        arr_targpsf = np.arange(start1, end1+1)
+        print 'arr_targpsf', arr_targpsf
+        
+
+        #------
+        #open txt file with list of known binaries
+        #------
+        arr_bin = open(directory + '/' + directory + '_clearbinaries.txt', 'rb').read().splitlines()
+        arr_bin_dates = np.array(arr_bin[0::2])
+        arr_bin_setnumbs = np.array(arr_bin[1::2])
+        #print 'arr_bin_dates', arr_bin_dates
+        #print 'arr_bin_setnumbs', arr_bin_setnumbs
+
+
+
+        #------
+        #check for filter of 1st img in set
+        #------
+	filter_of_set = check_filter(start1, date) 
+        print 'filter_of_set', filter_of_set
 
 
         
-        cube = []
-        for numb_klip_modes in arr_klipmodes:
-                arr_mdn = []
-                for filenumb_img1 in arr_targpsf:
-                        filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '.fits'
-                        if exists(filename_output):
-                                img = afits.open(filename_output, memmap = False)[0].data
-                                arr_mdn.append(img)
-                arr_mdn = np.median(np.array(arr_mdn), axis = 0)                
-                cube.append(arr_mdn)
-        cube = np.array(cube)
-        print 'cube.shape', cube.shape
-        filename_cube = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_klipcube.fits'
-        hdu = pf.PrimaryHDU(cube)
-        hdulist = pf.HDUList([hdu])
-        hdulist.writeto(filename_cube, clobber=True)
-                
+        #------
+        # Add reference filenumbs from all dates
+        #------
+        arr_substar = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                total_sets = struct_ShaneAO_total_sets[date_ref]
+                print 'total_sets', total_sets
+                arr_substar_temp = np.array([]) #array for adding ref psf filenames
+                for setnumb2 in np.arange(1,total_sets+1):
+                        if setnumb2 == int(setnumb1) and index_date_targ == index_date:
+                                print date_ref, 'set', setnumb2, 'skipped'
+                                continue
+                        elif str(int(setnumb2)) in arr_bin_setnumbs:
+                                arr_index_setnumb_bin = np.where(arr_bin_setnumbs == str(int(setnumb2)))[0]
+                                #print arr_index_setnumb_bin
+                                '''
+                                print '------'
+                                print 'index_setnumb', index_setnumb
+                                print 'set number', setnumb2
+                                print 'corresponding date in txt file', arr_bin_dates[index_setnumb]
+                                print 'date in loop', date_ref
+                                '''
+                                for index_setnumb_bin in arr_index_setnumb_bin:
+                                        if arr_bin_dates[index_setnumb_bin] == date_ref:
+                                                print date_ref, 'set', setnumb2, 'skipped since it is a known binary'
+                                                continue
+                        else:
+                                ####date_ref and setnumb2
+                                #print 'adding elements in set no.', setnumb2, 'for date', date_ref
+                                arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
+                                start2 = int(arr_startend2[0])
+                                end2 = int(arr_startend2[1])
+                                arr_imgnumbs = np.arange(start2, end2+1)
+                                arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
+                                arr_temp = np.zeros(arr_imgnumbs.size)
+                                arr_temp.fill(setnumb2)
+                arr_substar_temp = arr_substar_temp.astype(int)
+                arr_substar.append(arr_substar_temp)
+        print 'arr_substar', arr_substar
+
+
+
+        '''
+        #------
+        # Add reference filenumbs from all dates
+        #------
+	filter_of_set = check_filter(start1, date) #check for filter of 1st img in set
+        print 'filter_of_set', filter_of_set
+        arr_substar = []
+        print 'setnumb1', int(setnumb1)
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                total_sets = struct_ShaneAO_total_sets[date_ref]
+                print 'total_sets', total_sets
+                arr_substar_temp = np.array([]) #array for adding ref psf filenames
+                for setnumb2 in np.arange(1,total_sets+1):
+                        if setnumb2 == int(setnumb1) and index_date_targ == index_date:
+                                print 'index_date_targ', index_date_targ, 'i.e.', date_ref, 'set', setnumb2, 'skipped'
+                                continue
+                        else:
+                                print 'adding elements in set no.', setnumb2, 'for date', date_ref
+                                arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
+                                start2 = int(arr_startend2[0])
+                                end2 = int(arr_startend2[1])
+                                arr_imgnumbs = np.arange(start2, end2+1)
+                                arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
+                arr_substar_temp = arr_substar_temp.astype(int)
+                arr_substar.append(arr_substar_temp)
+        print 'arr_substar', arr_substar
+        '''
+
+
+        #------
+        # load reference imgs one by one
+        # Check filter, FWHM, max/min pixel values, img size
+        # Include only the ones within parameters set above at beginning of function
+        #------
+        arr_j = []
+        arr_img2 = []
+        for index_date in np.arange(len(arr_date_ShaneAO)):
+                date_ref = arr_date_ShaneAO[index_date]
+                arr_j_temp = []
+                arr_img2_temp = []
+                arr_substar_temp = arr_substar[index_date]
+                print 'arr_substar_temp', arr_substar_temp
+                for j in arr_substar_temp: #loop through ref imgs
+                        #print 'compiling img', j, 'for subtraction'
+                        arr_output = []
+                        arr_rss = np.array([])
+                        j_index = np.argwhere(arr_substar_temp == j)
+                        j_index = j_index[0]
+                        j_index = j_index[0]
+                        if j > 999:
+                                filename =  directory + '/' + date_ref  + '/s' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        print filename, 'doesnt exist'
+                                        continue
+                        else:
+                                filename =  directory + '/' + date_ref  + '/s0' + str(int(j)) + '_reduced_centered.fits'
+                                if exists(filename):
+                                        img2 = pf.open(filename)[0].data
+                                        maxpixval = np.amax(img2)
+                                        img2 /= np.amax(img2)
+                                else:
+                                        print filename, 'doesnt exist'
+                                        continue
+                                
+                        img_filter = check_filter(j, date_ref)
+                        if img_filter != filter_of_set: # removing frames of different filter
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'img filter: ', img_filter, 'different from set filter:', filter_of_set
+                                continue
+                        elif maxpixval > maxpix_threshold or maxpixval < minpix_threshold: # removing frames with max pix values not within threshold
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'max pixel value of', maxpixval, 'not within allowed region'
+                                continue
+
+                        fwhm = get_fwhm(img2)
+                        if not fwhm: # remove frames that gaussian func couldn't fit
+                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                continue 
+                        elif fwhm > fwhm_threshold: # remove frames with large fwhm
+                                print 'eliminating', j, 'from subtraction', 'from date', date_ref
+                                #print 'FWHM greater than', fwhm_threshold
+                                continue
+                        
+                        arr_j_temp.append(int(j))
+                        img2 = img2.flatten() #change to 1D array
+
+                        if img2.size != numb_pixels_all_imgs: # making sure img is the right size 
+                                print 'img2.shape', img2.shape
+                                print j, date_ref
+                                useless = raw_input('IMG NOT CORRECT SIZE. CHECK FILE. Press any key to skip img and continue.')
+                                continue
+                        arr_img2_temp.append(img2)
+                        #print 'len(arr_img2_temp)', len(arr_img2_temp)
+                arr_img2_temp = np.array(arr_img2_temp)
+                print 'arr_img2_temp.shape', arr_img2_temp.shape
+                arr_img2.append(arr_img2_temp)
+                arr_j.append(arr_j_temp)
+
+
+
+        #------
+        #Load array of filenumbs for ShaneAO, correlation matrix, and corresponding filenumbs in matrix
+        #------
+        filename_structShaneAOfilenumbs = 'struct_ShaneAO_filenumbs.p'
+        struct_ShaneAO_filenumbs = pickle.load(open(filename_structShaneAOfilenumbs, 'rb'))
+        filename_matrixcorr = 'matrix_corr.p'
+        matrix_corr = pickle.load(open(filename_matrixcorr, 'rb')) 
+        filename_arrfilenumbscorr = 'arr_filenumbs_corr.p'
+        arr_filenumbs_corr = pickle.load(open(filename_arrfilenumbscorr, 'rb')).astype(int) #file numbers corresponding to position in correlation matrix
+        setnumb1 = int(setnumb1) #set numb for target psf img
+        arr_filenumbs = struct_ShaneAO_filenumbs[index_date_targ] #array of filenumbers in target date
+
+
+
+        #------
+        # getting rid of frames of the same set in correlation matrix
+        #------
+        for element in arr_targpsf:
+                index_i_chunk = np.argwhere(arr_filenumbs == element)
+                index_i_chunk = index_i_chunk[0][0]
+                print 'index_i_chunk', index_i_chunk
+                print 'check it', (index_date_targ*max_numb_imgs) + index_i_chunk
+                matrix_corr[:, (index_date_targ*max_numb_imgs) + index_i_chunk] = 100 #change number if necessary. Now, 100 is bad correlation.
+        numb_dates = len(struct_ShaneAO_filenumbs)
+        arr_indexdate_corrs = np.zeros(numb_dates*max_numb_imgs) #array to be filled with indexes of dates correspoding to corr matrix
+        for index_indexdatecorrs in np.arange(numb_dates):
+                arr_indexdate_corrs[index_indexdatecorrs*max_numb_imgs:(index_indexdatecorrs+1)*max_numb_imgs] = index_indexdatecorrs
+        arr_indexdate_corrs = arr_indexdate_corrs.astype(int)
+
+        
+        
+        #------
+        # Create list of structures with info for klip
+        # Takes certain number of best imgs by referencing correlation matrix
+        #------
+        print 'Now creating arr_pool_vars, for feeding into KLIP function'
+        arr_pool_vars = []	
+        for index_i in np.arange(arr_targpsf.size):
+                arr_j_optimal = []
+                arr_img2_optimal = []
+                i = arr_targpsf[index_i]
+                print i
+                index_i = np.argwhere(arr_filenumbs == i)[0][0]
+                #print 'index_i', index_i
+		arr_corrs = matrix_corr[(index_date_targ*max_numb_imgs) + index_i, :]
+                index_sort_corr = np.argsort(arr_corrs)
+                #print 'index_sort_corr', index_sort_corr
+                arr_indexdateoptimal = arr_indexdate_corrs[index_sort_corr]
+                #print 'arr_indexdateoptimal', arr_indexdateoptimal
+                arr_filenumbs_optimal = arr_filenumbs_corr[index_sort_corr]
+                arr_index_j_optimal = []
+                for index_optimal in np.arange(arr_filenumbs_optimal.size).astype(int):
+                        index_date_optimal = arr_indexdateoptimal[index_optimal]
+                        #print 'index_date_optimal', index_date_optimal
+                        filenumb_optimal = arr_filenumbs_optimal[index_optimal]
+                        #print 'filenumb_optimal', filenumb_optimal
+                        #print 'len(arr_substar[index_date_optimal])', len(arr_substar[index_date_optimal])
+                        #print 'len(arr_j[index_date_optimal])', len(arr_j[index_date_optimal])
+                        index_j_optimal = np.argwhere(arr_j[index_date_optimal] == filenumb_optimal)
+                        #print 'index_j_optimal', index_j_optimal
+                        if index_j_optimal:
+                                arr_j_optimal.append(arr_j[index_date_optimal][index_j_optimal[0][0]])
+                                arr_img2_optimal.append(arr_img2[index_date_optimal][index_j_optimal[0][0]])
+                        if len(arr_j_optimal) >= numb_imgs_keep:
+                                break
+
+                arr_img2_optimal = np.array(arr_img2_optimal)
+                #print 'arr_img2_optimal.shape', arr_img2_optimal.shape
+                for index_row in np.arange(len(arr_img2_optimal)): # subtract each row by mean of row
+                        mean_row = np.mean(arr_img2_optimal[index_row])
+                        arr_img2_optimal[index_row] -=  mean_row
+                        
+                #print 'mean of arr_img2_optimal should be nearly zero:'
+                #print 'np.mean(arr_img2_optimal):', np.mean(arr_img2_optimal)
+                for radius_mock in arr_radiusmock: # create list of structures
+                        for mock_factor in arr_mockfactor:
+                                for theta in arr_theta:
+                                        for numb_klip_modes in arr_klipmodes:
+                                                struct = {'filenumb_img1': i, 'arr_img2': arr_img2_optimal, 'date_ref': date_ref, 'numb_klip_modes':numb_klip_modes, 'max_rad_img': max_rad_img, 'rad_annulus': rad_annulus, 'radius_mock':radius_mock, 'mock_factor': mock_factor, 'theta': theta}
+                                                arr_pool_vars.append(struct)
+                                                
+        
+                                                
+        #------
+        # save/load list of structures as needed
+        #------
+        filename_arrpoolvars = 'klip_arr_pool_vars_' + date + 'set' + str(int(setnumb1)) + '.p'
+        #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb')) #loads list of structures
+
+        print '------------------------'
+	print 'No of loops to run:', len(arr_pool_vars)
+        print '------------------------'
+        #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb')) #saves list of structures
+        
+
+
+
+        #------
+        # run KLIP
+        #------
+        print 'Now starting threads...'
+        
+	for elem in arr_pool_vars:
+		klip(elem)
+        
+        '''
+	threadnumb = 6
+	thepool = ThreadPool(threadnumb)
+        arr_pool = thepool.map(klip, arr_pool_vars)
+        thepool.close()
+        thepool.join()
+        '''
+
+        
         
 def klip(struct):
-        
+        #------
+        #Extract variables from input structure
+        #------
         filenumb_img1 = struct['filenumb_img1']
         arr_img2 = struct['arr_img2']
         date_ref = struct['date_ref']
@@ -2194,16 +4057,28 @@ def klip(struct):
         mock_factor = struct['mock_factor']
         theta_mock = struct['theta']
         arr_radstarts = np.arange(1, max_rad_img+1, rad_annulus)
+        print 'starting:', filenumb_img1, 'kmode', int(numb_klip_modes), ', radius', int(radius_mock), ', ratio', int(mock_factor), ',', datetime.datetime.now().strftime('%m-%d %H:%M:%S')
 
+
+        
+        #-------
+        # Define filenames of fits files
+        # Exit function if files already exist
+        # CHANGE FILENAMES IF NECESSARY        
+        #-------
+        filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radannulus' + str(int(rad_annulus)) + '.fits'
+        filename_sub = directory + '/' + date + '/' + str(filenumb_img1) + '_klipsubimg_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radannulus' + str(int(rad_annulus)) + '.fits'
+        filename_imgmock = directory + '/' + date + '/' + str(filenumb_img1) + '_klipmockimg_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_radannulus' + str(int(rad_annulus)) + '.fits'
+        if exists(filename_sub) and exists(filename_output) and exists(filename_imgmock):
+                print 'skipping', filenumb_img1, 'kmode', int(numb_klip_modes), ', radius', int(radius_mock), ', ratio', int(mock_factor)
+                return 0
+        
 
         
         #---------------------
         #creating mock binary to be injected into img
         #---------------------
-        try:
-                img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
-        except:
-                return 0
+        img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
         img_mock /= np.amax(img_mock)
         if mock_factor != 0:
                 img_mock /= float(mock_factor)
@@ -2251,18 +4126,8 @@ def klip(struct):
                 img_mock = np.real(img_mock)
                 img1 += img_mock
 
+
                 
-
-        #-----------------------------------        
-        #save initial img with mock up binary added
-        #-----------------------------------
-        filename_imgmock = directory + '/' + date + '/' + str(filenumb_img1) + '_klipmockimg_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '.fits'
-        hdu = pf.PrimaryHDU(img1)
-        hdulist = pf.HDUList([hdu])
-        hdulist.writeto(filename_imgmock, clobber=True) 
-
-
-
         #----------
         #flatten img and save img shape
         #----------
@@ -2270,17 +4135,14 @@ def klip(struct):
         img1_flat = img1.flatten()
         radi = 0
 
-        
 
-        #-------
-        # Define filenames of fits files
-        # Exit function if files already exist
-        # CHANGE FILENAMES IF NECESSARY        
-        #-------
-        filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '.fits'
-        filename_sub = directory + '/' + date + '/' + str(filenumb_img1) + '_klipsubimg_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '.fits'
-        if exists(filename_sub) and exists(filename_output) and exists(filename_imgmock):
-                return 0
+        
+        #-----------------------------------        
+        #save initial img with mock up binary added
+        #-----------------------------------
+        hdu = pf.PrimaryHDU(img1)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename_imgmock, clobber=True) 
 
 
 
@@ -2324,8 +4186,8 @@ def klip(struct):
         hdu = pf.PrimaryHDU(img_sub.reshape(img1shape))
         hdulist = pf.HDUList([hdu])
         hdulist.writeto(filename_sub, clobber=True)
-        
-        print 'done with', filenumb_img1, 'kmode', int(numb_klip_modes), ', radius', int(radius_mock), ', ratio', int(mock_factor), ', theta', int(theta_mock)
+
+        print 'done with:', filenumb_img1, 'kmode', int(numb_klip_modes), ', radius', int(radius_mock), ', ratio', int(mock_factor), ',', datetime.datetime.now().strftime('%m-%d %H:%M:%S')
         return 1
 
 
@@ -2335,7 +4197,7 @@ def klip(struct):
 def get_klip_basis(R, cutoff):
         #takes matrix R with N rows, M columns. N is number of imgs, M is number of pixels in img
         #cutoff is number of klip modes to use.
-        ##
+        #------
 
         w, V = np.linalg.eig(np.dot(R, np.transpose(R)))
         sort_ind = np.argsort(w)[::-1] #indices of eigenvals sorted in descending order
@@ -2343,6 +4205,103 @@ def get_klip_basis(R, cutoff):
         Z = np.dot(1./sv*np.transpose(V[:, sort_ind]), R)
         return Z[0:cutoff, :]
 
+
+def create_cube_theklip():
+        arr_klipmodes = np.arange(15, 35+1, 10)
+        
+
+        #---------------
+        #ask for user input regarding which set to take as target psf
+        #reads txt file in directory to know which files to use
+        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+	arr_targpsf = np.arange(start1, end1+1)
+
+
+
+        #------
+        # Median imgs for each numb of klip modes for the entire set
+        #Now create cube by iterating through klip modes and adding to 'cube' array
+        #------
+        cube = []
+        for numb_klip_modes in arr_klipmodes:
+                arr_mdn = []
+                for filenumb_img1 in arr_targpsf:
+                        filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '.fits'
+                        if exists(filename_output):
+                                img = pf.open(filename_output, memmap = False)[0].data
+                                arr_mdn.append(img)
+                        else:
+                                print filename_output, 'doesnt exist'
+                                continue
+                arr_mdn = np.median(np.array(arr_mdn), axis = 0)                
+                cube.append(arr_mdn)
+        cube = np.array(cube)
+        print 'cube.shape', cube.shape
+        filename_cube = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) +  '_klipcube.fits'
+        hdu = pf.PrimaryHDU(cube)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename_cube, clobber=True)
+        print 'CREATED:', filename_cube
+        
+
+
+
+def create_cube_klip():
+        arr_klipmodes = np.arange(5, 45+1, 10)
+        arr_radiusmock = np.array([10, 15, 20, 25, 30, 45, 60]).astype(int) #np.arange(15, 60+1, 15).astype(int)
+        print 'arr_radiusmock', arr_radiusmock
+        arr_mockfactor = np.array([30, 100, 150, 200, 500, 1000])#np.arange(100, 200+1, 50).astype(int)
+        print 'arr_mockfactor', arr_mockfactor
+        arr_theta = np.array([0]) #np.arange(0, 360, 60).astype(int)
+        print 'arr_theta', arr_theta
+
+        
+
+        #---------------
+        #ask for user input regarding which set to take as target psf
+        #reads txt file in directory to know which files to use
+        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+	arr_targpsf = np.arange(start1, end1+1)
+
+
+
+        #------
+        # Create cube by first iterating over each set of parameters
+        # Then, median imgs for each numb of klip modes for the entire set
+        #------
+        for theta_mock in arr_theta:
+                for radius_mock in arr_radiusmock:
+                        for mock_factor in arr_mockfactor:
+                                #------
+                                #Now create cube by iterating through klip modes and adding to 'cube' array
+                                #------
+                                cube = []
+                                for numb_klip_modes in arr_klipmodes:
+                                        arr_mdn = []
+                                        for filenumb_img1 in arr_targpsf:
+                                                filename_output = directory + '/' + date + '/' + str(filenumb_img1) + '_klipfinal_' + 'kmode' + str(int(numb_klip_modes)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '.fits'
+                                                if exists(filename_output):
+                                                        img = pf.open(filename_output, memmap = False)[0].data
+                                                        arr_mdn.append(img)
+                                                else:
+                                                        print filename_output, 'doesnt exist'
+                                                        continue
+                                        arr_mdn = np.median(np.array(arr_mdn), axis = 0)                
+                                        cube.append(arr_mdn)
+                                cube = np.array(cube)
+                                print 'cube.shape', cube.shape
+                                filename_cube = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_mockrad' + str(radius_mock) + '_' +  'ratio' + str(mock_factor) + '_theta' + str(int(theta_mock)) + '_klipcube.fits'
+                                hdu = pf.PrimaryHDU(cube)
+                                hdulist = pf.HDUList([hdu])
+                                hdulist.writeto(filename_cube, clobber=True)
+                                print 'CREATED:', filename_cube
+        
 
 
 def test_klip():
@@ -2393,8 +4352,164 @@ def merge_mat():
         mat[2*max_numb_imgs:3*max_numb_imgs,:] = mat2[2*max_numb_imgs:3*max_numb_imgs,:]
         
         pickle.dump(mat, open('matrix_corr.p', 'wb'))
-        
-        
+
+
+def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^2)-1, where N is number of dates
+        numb_dates = len(arr_date_ShaneAO)
+        fillelement = 100 #VARIABLE
+        matrix_corr = np.zeros([max_numb_imgs, max_numb_imgs])
+        imgshape = [161,161]
+        matrix_corr.fill(fillelement)
+        len_filt_box = 21
+
+        index_chunk_2d = np.unravel_index(index_chunk_1d, (numb_dates, numb_dates))
+        filename_matrix = 'matrix_corr_filt' + str(int(index_chunk_1d)) + '.fits'
+       
+        #------
+        #check if file already exists. If yes, load it and update as needed
+        #------
+        if exists(filename_matrix):
+                matrix_corr = pf.open(filename_matrix)[0].data
+        else:
+                print filename_matrix, 'doesnt exist'
+        struct_ShaneAO_filenumbs = {} #dictionary with date index numbers as tags, array of ALL filenumbs for that date as value
+        for index_date in np.arange(len(arr_date_ShaneAO)): # loop through INDEX of dates
+                date = arr_date_ShaneAO[index_date] #define date for index
+                total_sets = struct_ShaneAO_total_sets[date] # define total number of sets for date
+                arr_filenumbs = np.array([]) #array for adding img numbers
+                for setnumb in np.arange(1, total_sets+1):
+                        arr_startend = open(directory + '/' + date + '/set_'+ str(int(setnumb)) +'_info.txt', 'rb').read().splitlines()
+                        start = int(arr_startend[0])
+                        end = int(arr_startend[1])
+
+                        arr_filenumbs = np.append(arr_filenumbs, np.arange(start, end+1))
+                struct_ShaneAO_filenumbs[index_date] = arr_filenumbs
+
+
+
+        #------
+        # Save structure containing img numbers for all dates
+        #------
+        filename = 'struct_ShaneAO_filenumbs.p'
+        pickle.dump(struct_ShaneAO_filenumbs, open(filename, 'wb'))        
+
+
+ 
+        #------
+        # Get 1D indexes of aperture around center of img, with radius = max_rad_img
+        #------
+	img_empty = np.zeros(imgshape)
+	max_rad_ring = 4
+        arr_ringindex = []
+        for rad_ring in np.arange(0, max_rad_ring+1):
+                #------
+                #return: img values in aperture, array of 2d indexes for aperture
+                #------
+                ringvals, arr_ringindex_temp = return_ring(img_empty, rad_ring) 
+
+                
+                #------
+                #loop through array of 2d indexes, change them to 1d indexes
+                #------                
+                for ringindex in arr_ringindex_temp:
+                        #ringindex = np.ravel_multi_index(ringindex, imgshape)
+                        arr_ringindex.append(ringindex) #array of 1d indexes for center aperture of radius max_rad_ring
+                
+
+        #------
+        # Create and save array of filenumbs with dimensions = length of correlation matrix
+        #------
+        filename_filenumbs_corr = 'arr_filenumbs_corr' + '.fits'
+        arr_filenumbs_corr = np.zeros(matrix_corr.shape[0]*len(arr_date_ShaneAO)) #array of img numbs corresponding to corr matrix
+        for index_datefill in np.arange(len(struct_ShaneAO_filenumbs)):
+                arr_filenumbsfill = struct_ShaneAO_filenumbs[index_datefill]
+                arr_filenumbs_corr[(index_datefill*max_numb_imgs):(index_datefill*max_numb_imgs) + arr_filenumbsfill.size] = arr_filenumbsfill
+        save_fits(arr_filenumbs_corr, filename_filenumbs_corr)
+
+
+
+        y_date_index = index_chunk_2d[0]
+        x_date_index = index_chunk_2d[1]
+        arr_filenumbs_y = struct_ShaneAO_filenumbs[y_date_index]
+        arr_filenumbs_x = struct_ShaneAO_filenumbs[x_date_index]
+        for index_filenumb_y in np.arange(arr_filenumbs_y.size).astype(int):
+                #------
+                # open img corresponding to index in y direction of correlation matrix
+                #------
+                filenumb_y = int(arr_filenumbs_y[index_filenumb_y])
+                if filenumb_y > 999:
+                        filename_y = directory + '/' + arr_date_ShaneAO[y_date_index] + '/' + 's' + str(filenumb_y) + '_RCF.fits'
+                        if exists(filename_y):
+                                imgy = pf.open(filename_y)[0].data
+                        else:
+                                print filename_y, 'does not exist'
+                                continue
+                else:
+                        filename_y = directory + '/' + arr_date_ShaneAO[y_date_index] + '/' + 's0' + str(filenumb_y) + '_RCF.fits'
+                        if exists(filename_y):
+                                imgy = pf.open(filename_y)[0].data
+                        else:
+                                print filename_y, 'does not exist'
+                                continue
+
+                print '------'                                
+                print 'imgy', filename_y
+                print (index_filenumb_y+1)*100./(arr_filenumbs_y.size), '% done'
+
+                for index_filenumb_x in np.arange(arr_filenumbs_x.size).astype(int):
+
+                        #------
+                        #If correlation matrix has been filled for this, skip
+                        #------
+                        if matrix_corr[index_filenumb_y, index_filenumb_x] <= (fillelement-(fillelement/100)):
+                                continue
+
+
+
+                        #------
+                        # open img corresponding to index in x direction of correlatin matrix
+                        #------
+                        filenumb_x = int(arr_filenumbs_x[index_filenumb_x])
+                        if filenumb_x > 999:
+                                filename_x = directory + '/' + arr_date_ShaneAO[x_date_index] + '/' + 's' + str(filenumb_x) + '_RCF.fits'
+                                if exists(filename_x):
+                                        imgx = pf.open(filename_x)[0].data
+                                else:
+                                        #print filename_x, 'does not exist'
+                                        continue
+                        else:
+                                filename_x = directory + '/' + arr_date_ShaneAO[x_date_index] + '/' + 's0' + str(filenumb_x) + '_RCF.fits'
+                                if exists(filename_x):
+                                        imgx = pf.open(filename_x)[0].data
+                                else:
+                                        #print filename_x, 'does not exist'
+                                        continue
+
+                        #print 'imgx', filename_x
+
+
+                        #------
+                        # mask center of img with aperture
+                        #------
+                        for ringindex in arr_ringindex:
+                                imgx[ringindex[0], ringindex[1]] = 0
+                                imgy[ringindex[0], ringindex[1]] = 0
+                                
+                        imgy /= np.sum(imgy)
+                        imgx /= np.sum(imgx)
+                        img_res = imgy - imgx
+                        sd_img_res = np.std(img_res)
+                        ####Get rid of middle aperture pixels when taking std
+                        matrix_corr[index_filenumb_y, index_filenumb_x] = sd_img_res
+                        #print matrix_corr
+        save_fits(matrix_corr, filename_matrix)
+
+
+
+
+
+
+
 def correlation_matrix(index_date1):
         numb_dates = 3  ### VARIABLE
         fillelement = 100
@@ -2435,8 +4550,8 @@ def correlation_matrix(index_date1):
                 for ringindex in arr_ringindex_temp:
                         counter_ringindex += 1
                         ringindex = np.ravel_multi_index(ringindex, imgshape)
-                        arr_ringindex.append(ringindex)
-        
+                        arr_ringindex.append(ringindex) 
+       
         arr_filenumbs_corr = np.zeros(matrix_corr.shape[0])
         for index_datefill in np.arange(len(struct_ShaneAO_filenumbs)):
                 arr_filenumbsfill = struct_ShaneAO_filenumbs[index_datefill]
@@ -2559,6 +4674,8 @@ def view_pickle(radius_mock = 23, mock_factor = 125):
         '''
 	subprocess.call('/home/apps/ds9/ds9 ' + 'test_final.fits', shell = True)
 
+
+        
 def plot_pickle(radius_mock = 23, mock_factor = 125):
 	
         setnumb1 = raw_input('Enter set number (1,2,3,4, etc.):')
@@ -2620,6 +4737,7 @@ def plot_pickle(radius_mock = 23, mock_factor = 125):
 	subprocess.call('/home/apps/ds9/ds9 ' + outputfilename, shell = True)
 
 
+        
 def psf_subtract(file1, file2):
         #Subtract different psfs from one another
         #load files
@@ -2673,13 +4791,13 @@ def psf_subtract(file1, file2):
         
         pickle.dump(arr_5sd, open(file1 + "-" + file2 + "_5sdplot.p", 'wb'))
         pickle.dump(arr_mdn, open(file1 + "-" + file2 + "_mdnplot.p", 'wb'))
+
+
         
 def check_ring(img, radi): #inputs are: img array, radius of ring
 #check img for possible binaries. 
-#Check if any points in a ring are greater than 5sd above the median in a ring
-	#file1 = raw_input("Filename? (Don't include .fits):")
-	#img = pf.open(file1 + '.fits')[0].data
-        #print 'check ring: img.shape', img.shape
+#returns structure with maximum value in ring, sd of ring, median of ring
+
 	y_length = img.shape[0]
 	x_length = img.shape[1]
 	center_index = [(y_length-1)/2, (x_length-1)/2]
@@ -2728,11 +4846,10 @@ def check_ring(img, radi): #inputs are: img array, radius of ring
 	#subprocess.call('open -a SAOImage\ DS9 ' + 'test_ring.fits', shell = True)
 
 
-def check_ring_mock(img, radi, theta_mock): #inputs are: img array, radius of ring, angle where binary is positioned
+def check_ring_mock(img, radi, theta_mock, theta_pm = 50): #inputs are: img array, radius of ring, angle where binary is positioned
         #check img for possible binaries. 
         #Check if any points in a ring are greater than 5sd above the median in a ring
-
-        theta_pm = 50 #exclude plus-minus this angle around theta_mock
+        #exclude plus-minus angle theta_pm around theta_mock
         
         y_length = img.shape[0]
 	x_length = img.shape[1]
@@ -2802,18 +4919,21 @@ def return_ring(img, radi): #inputs are: img array, radius of ring
                         if (radi-0.5) < distance(center_index[0], y_index, center_index[1], x_index) < (radi+0.5): #creating ring of radius: radi
 				arr_index.append([y_index, x_index]) #appending indexes of points in ring
 	arr_ring = np.array([])
-	for element in arr_index:
-		arr_ring = np.append(arr_ring, img[element[0]][element[1]])
-
+        for element in arr_index:
+                try:
+                        arr_ring = np.append(arr_ring, img[element[0]][element[1]])
+                except:
+                        print element
+                        print radi
+                        print arr_index
         return arr_ring, arr_index
+
 
 def plotsframe():
         total_sets = 4 ##### subject to change!
 
         file1 = raw_input("Enter No. of 1st set:")
 	minpix = 6
-
-
 
         img_bef = pf.open(directory + '/' + date + '/' + 'centroid_' + file1 + '.fits')[0].data
         img_bef /= np.amax(img_bef) #divide by max. brightness
@@ -2857,6 +4977,8 @@ def plotsframe():
         plt.ylabel('magnitude')
         plt.gca().invert_yaxis()
         plt.show()
+
+
 
 def plots1():
         file1 = raw_input("No. of 1st centroid? (Don't include .fits):")
@@ -3109,10 +5231,7 @@ def get_fwhm(img, y_binary = 0, x_binary = 0):
 		popt, pcov = curve_fit(gauss_func, np.array([y, x]), img, p0 = initial_guess, maxfev = 3200)
 	except:
 		print 'curve_fit didnt work with file'
-		print '_____________________________'
-		print '_____________________________'
-		print '_____________________________'
-		print '_____________________________'
+		print '------'
 		return False
 	
 	#print 'popt.shape', popt.shape
@@ -3124,8 +5243,8 @@ def get_fwhm(img, y_binary = 0, x_binary = 0):
 	sigma_x = abs(popt[4])
 	sigma_avg = np.average([sigma_y, sigma_x])
 	fwhm = 2*np.sqrt(2*np.log(2))*sigma_avg
-	if fwhm > 10:
-		print 'FWHM', fwhm
+	#if fwhm > 10:
+	#	print 'FWHM', fwhm
 	return fwhm
 
         
@@ -3163,7 +5282,7 @@ def run_detlim():
 
 
 ######################################################################################
-#################'''T'was a good effort! (Useless code)'''############################
+#################'''It was a good effort! (Useless code)'''############################
 ######################################################################################
 
 def detect_maxima():
@@ -3297,3 +5416,180 @@ def openview_pickle(filename):
 
 def open_fits_taurus(filename):
         subprocess.call(ds9_taurus + filename, shell = True)
+
+                
+def outdated_Loci():
+        #define parameters for loci
+        radius_sub = 1 #subtraction radius
+        radius_op = 3 #optimization radius                                                                                                             
+
+        #ask for user input regarding which set to take as target psf
+        #reads txt file in directory to know which files to use
+        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
+        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+        start1 = int(arr_startend1[0])
+        end1 = int(arr_startend1[1])
+
+        arr_substar = np.array([]) #array for adding ref psf filenames
+	arr_setnumb = np.array([]) #array for adding target psf filenames
+	for setnumb2 in np.arange(1,total_sets+1):
+                if setnumb2 != int(setnumb1):
+                        print 'adding elements in set no.', setnumb2
+                        arr_startend2 = open(directory + '/' + date + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
+                        start2 = int(arr_startend2[0])
+                        end2 = int(arr_startend2[1])
+                        arr_imgnumbs = np.arange(start2, end2+1)
+                        arr_substar = np.append( arr_substar,  arr_imgnumbs) #array of filenames for ref psf
+			arr_temp = np.zeros(arr_imgnumbs.size)
+                        arr_temp.fill(setnumb2)
+                        arr_setnumb = np.append(arr_setnumb, arr_temp) #set numbers
+
+        ##### FOR TESTING #####
+	arr_substar = arr_substar[0:20]
+        print arr_substar
+        arr_setnumb = arr_setnumb[0:20]
+        print arr_setnumb
+        arr_refpsf = np.arange(start1, start1 + 10)
+        ####################### 
+        
+        #define subtraction ratios to be iterated through                                                                                                       
+        arr_rad = np.arange(1, 55, radius_sub)
+        arr_rad = arr_rad.astype(int)
+        arr_radcheck = np.arange(55)+1
+        arr_subratio = (np.arange(20)+90)/100.
+
+        #define empty arrays, for psf-subtracted imgs for avging
+        arr_img = []
+        arr_mdn = np.array([])
+        arr_5sd = np.array([])
+
+        #arr_refpsf = np.arange(start1, end1+1)
+        arr_imgfinals = []
+
+        
+        threadlist = []
+        threadcount = 0
+        for i in arr_refpsf: #iterating through images in the 1st set
+                print '_________'
+                print i
+                if i > 999:
+                        filename = directory + '/' + date  + '/s' + str(int(i)) + '_reduced_centered.fits'
+                        if exists(filename):
+                                img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1)
+                        else:
+                                continue
+                else:
+                        filename =  directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
+                        if exists(filename):
+                                img1 = pf.open(filename)[0].data
+                                img1 /= np.amax(img1)
+                        else:
+                                continue
+                img_final = np.zeros(img1.shape)
+                for radi in arr_rad:
+                        print 'working on radius', radi
+                        arr_radsub = np.arange(radi, radi+radius_sub)
+                        #print arr_radsub
+                        arr_radop = np.arange(radi, radi+radius_op)
+                        #print arr_radop
+                        img1op = np.array([])
+                        arr_indexop = []
+                        for rad_op in arr_radop: #creating target optimization annulus
+                                arr_ringop, indexop = return_ring(img1, rad_op)
+                                for element in indexop:
+                                        arr_indexop.append(element)
+                                img1op = np.append(img1op, arr_ringop)
+
+                        img1sub = np.array([])
+                        arr_indexsub = []
+                        for rad_sub in arr_radsub: #creating target subtraction annulus
+                                arr_ringsub, indexsub = return_ring(img1, rad_sub)
+                                for element in indexsub:
+                                        arr_indexsub.append(element)
+                                img1sub = np.append(img1sub, arr_ringsub)
+                        #arr_refsub = np.array([])
+                        arr_refop = np.array([])
+                        arr_j = []
+                        counter2 = 0
+                        for j in arr_substar: #loop through ref imgs
+                                arr_output = []
+                                arr_rss = np.array([])
+                                j_index = np.argwhere(arr_substar == j)
+                                j_index = j_index[0]
+                                j_index = j_index[0]
+                                if j > 999:
+                                        filename =  directory + '/' + date  + '/s' + str(int(j)) + '_reduced_centered.fits'
+                                        if exists(filename):
+                                                img2 = pf.open(filename)[0].data
+                                                img2 /= np.amax(img2)
+                                        else:
+                                                continue
+                                else:
+                                        filename =  directory + '/' + date  + '/s0' + str(int(j)) + '_reduced_centered.fits'
+                                        if exists(filename):
+                                                img2 = pf.open(filename)[0].data
+                                                img2 /= np.amax(img2)
+                                        else:
+                                                continue
+                                arr_j.append(int(j))
+
+                                img2op = np.array([])
+                                for rad_op in arr_radop: #creating reference optimization anunulus
+                                        img2op = np.append(img2op, return_ring(img2, rad_op)[0])
+                                img2op_temp = img2op.reshape(-1,1)
+				
+				if counter2 == 0:
+                                        arr_refop = img2op_temp
+                                        #arr_refsub = img2sub_temp
+				else:
+			                arr_refop = np.concatenate((arr_refop, img2op_temp), axis = 1)
+                                        #arr_refsub = np.concatenate((arr_refsub, img2sub_temp), axis = 1)
+                                counter2 += 1
+                        Y = img1op
+                        print 'Y.shape', Y.shape
+                        X = arr_refop
+                        print 'X.shape', X.shape
+                        alpha = np.dot(np.transpose(X), X)
+                        beta = np.dot(np.transpose(X), Y)
+                        coeffs = np.dot(np.linalg.inv(alpha), beta)
+                        print 'sum of coeffs', np.sum(coeffs)
+                        #print 'coeffs.shape', coeffs.shape
+                        img_fill_annulus = np.zeros(img1.shape)
+                        #print 'arr_j', arr_j
+                        for index_imgs in np.arange(len(arr_j)):
+                                j = arr_j[index_imgs]
+                                j_index = np.argwhere(arr_substar == j)
+                                j_index = j_index[0]
+                                j_index = j_index[0]
+                                if j > 999:
+                                        filename =  directory + '/' + date + '/s' + str(int(j)) + '_reduced_centered.fits'
+                                        img_temp = pf.open(filename)[0].data
+                                else:
+                                        filename =  directory + '/' + date + '/s0' + str(int(j)) + '_reduced_centered.fits'
+                                        img_temp = pf.open(filename)[0].data
+                                img_temp /= np.amax(img_temp)
+                                img_fill_annulus += coeffs[index_imgs]*img_temp
+                        for coord_annulus in arr_indexsub:
+                                img_final[coord_annulus[0], coord_annulus[1]] = img_fill_annulus[coord_annulus[0], coord_annulus[1]]
+
+                img_output = img1 - img_final
+                arr_imgfinals.append(img_output)
+                #hdu = pf.PrimaryHDU(img_output)
+                #hdulist = pf.HDUList([hdu])
+                #hdulist.writeto( directory + '/' + date + '/' 'test_loci.fits', clobber=True)
+                #subprocess.call('/home/apps/ds9/ds9 test_loci.fits', shell = True)
+        img_mdn = np.median(np.array(arr_imgfinals), axis = 0)
+        print 'img_mdn.shape', img_mdn.shape
+        for radius in arr_radcheck:
+                struct = check_ring(img_mdn, radius)
+                arr_mdn = np.append(arr_mdn, struct['mdn_ring'])
+                arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])
+
+        hdu = pf.PrimaryHDU(img_mdn)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(directory + '/' + date + 'set' + setnumb1 + '_loci' + '.fits', clobber=True)
+
+        pickle.dump(arr_5sd, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_5sdplot.p", 'wb'))
+        pickle.dump(arr_mdn, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_mdnplot.p", 'wb'))
+
