@@ -27,7 +27,7 @@ ds9_taurus = '/Users/gduchene/Applications/Ureka/bin/ds9 '
 #or different telescope
 #or changes to img files e.g. new stars added
 directory = 'ShaneAO'
-date = 'Sep16'
+date = 'Oct16'
 arr_date_ShaneAO = ['Jun15', 'Nov15', 'Mar16', 'Sep16', 'Oct16']
 struct_ShaneAO_total_sets = {'Jun15':28, 'Nov15':25, 'Mar16':25, 'Sep16':19, 'Oct16':5}
 total_sets = struct_ShaneAO_total_sets[date]
@@ -69,7 +69,9 @@ max_numb_imgs = 5000
 #create_flats() to median flats and create master flat
 #cleanup_flat() to fix broken pixels
 #run_create_reduced_imgs() to subtract imgs by sky img & divide imgs by flat
-#run_center_imgs():
+#run_center_imgs()
+#run_create_filts() to perform high-pass filter
+#run_create_centroid_filts()
 #------------------
 
 
@@ -118,7 +120,8 @@ def create_txt(date = date):
 def print_filters():
         print 'dealing with', date
 	arr_filternames = []
-	for i in np.arange(1, max_numb_imgs): #CHANGE ACCORDINGLY
+	#for i in np.arange(1, max_numb_imgs): #CHANGE ACCORDINGLY
+        for i in np.arange(119, 218): #CHANGE ACCORDINGLY
 
                 #load img file
                 filename = directory + '/' + date + '/' + 's' + str(i).zfill(4) + '.fits'
@@ -139,6 +142,7 @@ def print_filters():
 			print filtername
 			arr_filternames.append(filtername)
         print 'filters are:', arr_filternames
+
 
 def sort_filters():
         arr_ks_flat = []
@@ -350,24 +354,16 @@ def run_create_filts():
 
 
                         for img_numb in arr_targ:
-                                filename_init =  directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_reduced_centered.fits'
-                                filename_init2 = directory + '/' + date_science  + '/s0' + str(int(img_numb)) + '_reduced_centered.fits'
-                                if img_numb > 999:
-                                        filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_RCF.fits'
-                                else:
-                                        filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)) + '_RCF.fits'
-                                        subprocess.call('rm -rf ' + filename_output, shell = True) ###
-                                        print 'deleted', filename_output
-                                        filename_output  = directory + '/' + date_science  + '/s0' + str(int(img_numb)) + '_RCF.fits'
+                                filename_init =  directory + '/' + date_science  + '/s' + str(int(img_numb)).zfill(4) + '_reduced_centered.fits'
+                                filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)).zfill(4) + '_RCF.fits'
 
                                 if exists(filename_output):
+                                        print filename_output, 'exists'
                                         continue
                                 elif exists(filename_init):
                                         img_targ = pf.open(filename_init)[0].data
-                                elif exists(filename_init2):
-                                        img_targ = pf.open(filename_init2)[0].data
                                 else:
-                                        print img_numb, "doesn't exists"
+                                        print img_numb, "doesn't exist"
                                         continue
                                         
                                 img_targ -= medfilt(img_targ, [len_filt_box, len_filt_box])
@@ -380,7 +376,6 @@ def run_create_centroid_filts(total_sets = total_sets):
 # Create medianed images for all sets up to total_sets
 # Runs for LOCI-processed imgs, with high pass filtering
 #------
-
         print 'Date:', date
         for setnumb in np.arange(1,total_sets+1).astype(int): #loop through sets of stars
                 print 'working with set', setnumb
@@ -401,6 +396,7 @@ def run_create_centroid_filts(total_sets = total_sets):
                 hdulist.writeto(filename_output, clobber=True)
                 print 'created:', filename_output
                 
+
 def median_it_filts(arr_filenumbs):
         arr_mdn = []
         print arr_filenumbs
@@ -455,20 +451,18 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
         # Run with parallel sessions if thread_cond = True
         #------
         index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
-
+        fillelement = 10 #element for correlation matrix when no correlation is calculated
 
         #------
         # Open LOCI-subtracted, medianed img for set number
         # Record dimensions of array
         # Record total number of elements in array
         #------
-        filename_fits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_locifinal.fits'
+        filename_fits = directory + '/' + date + '/' + 'centroid_' + str(int(setnumb1))+'.fits'
         img_subed = pf.open(filename_fits)[0].data
         img1shape = img_subed.shape
         img1size = img_subed.size
 
-
-        
         #------
         # Define LOCI parameters 
         # Define high-pass filter box dimensions(width)
@@ -568,7 +562,6 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
         #------
         arr_substar = []
         for index_date in np.arange(len(arr_date_ShaneAO)):
-                counter_substar_date = 0
                 date_ref = arr_date_ShaneAO[index_date]
                 total_sets = struct_ShaneAO_total_sets[date_ref]
                 print '------'
@@ -603,13 +596,12 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
                                 arr_temp = np.zeros(arr_imgnumbs.size)
                                 arr_temp.fill(setnumb2)
                 arr_substar_temp = arr_substar_temp.astype(int)
-                counter_substar_date += arr_substar_temp.size #keep track of imgs added with counter
+                counter_substar_date = arr_substar_temp.size #keep track of imgs added with counter
                 print 'number of eligible img files:', counter_substar_date
                 arr_substar.append(arr_substar_temp)
-        print 'arr_substar', arr_substar
+        #print 'arr_substar', arr_substar
 
-
-        
+        '''
         #------
         # load reference imgs one by one
         # Check filter, FWHM, max/min pixel values, img size
@@ -617,7 +609,7 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
         #------
         arr_j = []
         arr_img2 = []
-        for index_date in np.arange(len(arr_date_ShaneAO)):
+        for index_date in np.arange(len(arr_date_ShaneAO)): #FIXFIXFIXFIX
                 date_ref = arr_date_ShaneAO[index_date]
                 arr_j_temp = []
                 arr_img2_temp = []
@@ -670,8 +662,7 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
                                 continue
                         arr_j_temp.append(int(j))
                         img2 = img2.flatten() #change to 1D array
-                        
-                        if img2.size != img1size: ####****!!!!!Change if necessary
+                        if img2.size != img1size:
                                 print 'img2.shape', img2.shape
                                 print j, date_ref
                         arr_img2_temp.append(img2)
@@ -679,9 +670,15 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
                 print 'arr_img2_temp.shape', arr_img2_temp.shape, 'for date:', date_ref
                 arr_img2.append(arr_img2_temp)
                 arr_j.append(arr_j_temp)
+        '''
 
+        #pickle.dump(arr_j, open('test_arrj.p', 'wb'))
+        #pickle.dump(arr_img2, open('test_arrimg2.p', 'wb'))
+        arr_j = pickle.load(open('test_arrj.p', 'rb'))
+        arr_img2 = pickle.load(open('test_arrimg2.p', 'rb'))
+        print 'saved test_arrj.fits'
+        print 'saved test_arrimg2.fits'
 
-                
         #------        
         #Load array of filenumbs for ShaneAO, correlation matrix, and corresponding filenumbs in matrix
         #------
@@ -694,36 +691,38 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
         arr_filenumbs_corr = pf.open(filename_arrfilenumbscorr)[0].data
         setnumb1 = int(setnumb1) #set numb for target psf img
         arr_filenumbs = struct_ShaneAO_filenumbs[index_date_targ]
+        filename_indexdates_corr = 'arr_indexdates_corr.fits'
+        arr_indexdates_corr = pf.open(filename_indexdates_corr)[0].data
 
 
-        
         #------
         #Getting rid of frames of the same set in correlation matrix
         #------
         for element in arr_targpsf: 
-                index_i_chunk = np.argwhere(arr_filenumbs == element)
-                index_i_chunk = index_i_chunk[0][0]
-                matrix_corr[:, (index_date_targ*max_numb_imgs) + index_i_chunk] = 100
+                index_date_in_arr_indexdates_corr = np.where(arr_indexdates_corr == index_date_targ)[0]
+                index_imgnumb_in_arr_filenumbs_corr = np.where(arr_filenumbs_corr == element)[0]
+                union_imgnumb_and_index = list(set(index_date_in_arr_indexdates_corr) & set(index_imgnumb_in_arr_filenumbs_corr))
+                index_final = union_imgnumb_and_index[0]
+                matrix_corr[:,index_final] = fillelement
 
-
-
+        '''
+        #DELETE WHEN DONE
         #------
-        #Fill an array with indexes of dates coresponding to correlation matrix
+        # Fill an array with indexes of dates coresponding to correlation matrix
         #------
         numb_dates = len(struct_ShaneAO_filenumbs)
         arr_indexdate_corrs = np.zeros(numb_dates*max_numb_imgs)
         for index_indexdatecorrs in np.arange(numb_dates):
                 arr_indexdate_corrs[index_indexdatecorrs*max_numb_imgs:(index_indexdatecorrs+1)*max_numb_imgs] = index_indexdatecorrs
         arr_indexdate_corrs = arr_indexdate_corrs.astype(int)
-
-
+        '''
 
         #------
         # Create list of structures with info for LOCI function
         # Takes certain number of best imgs by referencing correlation matrix
         #------
         print 'creating array of best reference imgs...'
-        arr_pool_vars = []	
+        arr_pool_vars = []
         for index_i in np.arange(arr_targpsf.size):
                 print '% of imgs added:', (index_i+1)*100./arr_targpsf.size
                 arr_img2_optimal = []
@@ -732,26 +731,39 @@ def run_loci_mockbins(setnumb1, input_radiusmock, bin_cond = True, thread_cond =
                 print '------'
                 print 'target img number', i, date
 
-                index_i = np.argwhere(arr_filenumbs == i)[0][0]
-		arr_corrs = matrix_corr[(index_date_targ*max_numb_imgs) + index_i, :] #extract row in correlation matrix
+                index_date_in_arr_indexdates_corr = np.where(arr_indexdates_corr == index_date_targ)[0]
+                index_imgnumb_in_arr_filenumbs_corr = np.where(arr_filenumbs_corr == i)[0]
+                union_imgnumb_and_index = list(set(index_date_in_arr_indexdates_corr) & set(index_imgnumb_in_arr_filenumbs_corr))
+                index_targ_corr = union_imgnumb_and_index[0]
+                print 'index_targ_corr', index_targ_corr
+		arr_corrs = matrix_corr[index_targ_corr, :] #extract row in correlation matrix
+                print 'matrix_corr.shape', matrix_corr.shape
+                print 'arr_corrs[0:6]', arr_corrs[0:6]
+                useless = raw_input('stopped...')
                 index_sort_corr = np.argsort(arr_corrs) #sort row for best correlations
-                arr_indexdateoptimal = arr_indexdate_corrs[index_sort_corr] #corresponding sorted date indexes
+                arr_indexdateoptimal = arr_indexdates_corr[index_sort_corr] #corresponding sorted date indexes
                 arr_filenumbs_optimal = arr_filenumbs_corr[index_sort_corr] #corresponding sorted reference file numbers
                 arr_index_j_optimal = []
                 for index_optimal in np.arange(arr_filenumbs_optimal.size).astype(int):
                         index_date_optimal = arr_indexdateoptimal[index_optimal]
                         filenumb_optimal = arr_filenumbs_optimal[index_optimal]
-                        index_j_optimal = np.argwhere(arr_j[index_date_optimal] == filenumb_optimal)
+                        if len(arr_j) > index_date_optimal: #make sure it's possible to index date
+                                index_j_optimal = np.argwhere(arr_j[index_date_optimal] == filenumb_optimal)
                         if index_j_optimal:
+                                print 'optimal ref img',index_optimal+1,':',arr_date_ShaneAO[index_date_optimal], filenumb_optimal
+                                print 'correlation:', arr_corrs[index_sort_corr[index_optimal]] 
                                 arr_j_optimal.append(arr_j[index_date_optimal][index_j_optimal[0][0]]) #file numb           
                                 img2_optimal = arr_img2[index_date_optimal][index_j_optimal[0][0]] #flattened reference img
                                 arr_img2_optimal.append(img2_optimal)
+                        else:
+                                continue
                         if len(arr_j_optimal) >= numb_imgs_keep:
                                 break
                 arr_img2_optimal = np.array(arr_img2_optimal)
                 arr_img2_optimal = np.transpose(arr_img2_optimal)
                 #print 'arr_img2_optimal.shape', arr_img2_optimal.shape
 
+                useless = raw_input('stopped after getting ref img files')
 
                 #------
                 # mock binaries?
@@ -869,7 +881,9 @@ def cleanup_flat():
 		hdulist.writeto(directory + '/' + date + '/' + 'cleaned_'+str(i), clobber=True)
 
 
-def create_reduced_imgs(setnumb):
+def create_reduced_imgs(setnumb, replace_cond = True):
+        if not replace_cond:
+                print "NOTE: Not replacing files if filenames exist. (replace_cond = False)"
 	setnumb = str(int(setnumb))
 	#uncomment the following & comment above if only 1 set is needed.
         #setnumb = raw_input('Enter set number (1,2,3,4, etc.):')
@@ -886,7 +900,7 @@ def create_reduced_imgs(setnumb):
 
         hdr = pf.open(directory + '/' + date + '/' + 's' + str(start1).zfill(4) + '.fits')[0].header
 	filtername = hdr['filt1nam']
-        #''' ____DO NOT ERASE!!_____
+        ''' ____DO NOT ERASE!!_____
 	if filtername[0] == 'K':
 		img_flat = pf.open(directory + '/' + date + '/' + 'cleaned_img_flat_ks.fits')[0].data
 		print 'ks'
@@ -898,10 +912,10 @@ def create_reduced_imgs(setnumb):
 		print 'j'
 	else:
 		print 'Filter name doesnt start with K, B or J'
-
-        #'''
+                
+        '''
         #####___Change as needed!!!___
-        #img_flat = pf.open(directory + '/' + date + '/' + 'cleaned_img_flat_ks.fits')[0].data
+        img_flat = pf.open(directory + '/' + date + '/' + 'cleaned_img_flat_ks.fits')[0].data
         #####_________________________
 
         
@@ -919,13 +933,14 @@ def create_reduced_imgs(setnumb):
 		img2 = (img-img_sky)/(img_flat)
 		hdu = pf.PrimaryHDU(img2)
 		hdulist = pf.HDUList([hdu])
-
-                hdulist.writeto(directory + '/' + date + '/' + 's' + str(i).zfill(4) + '_reduced_.fits',clobber=True)
-
-
-def run_center_imgs(total_sets = total_sets):
-        for setnumb in total_sets:
-                center_imgs(setnumb)
+                filename_output = directory + '/' + date + '/' + 's' + str(i).zfill(4) + '_reduced_.fits'
+                if not replace_cond:
+                        if exists(filename_output):
+                                continue
+                                print 'file exists. skipping'
+                else:
+                        hdulist.writeto(filename_output ,clobber=True)
+                        #print 'created file', filename_output
                         
 def center_imgs(setnumb):
 #create centroid of science img by stacking
@@ -1015,7 +1030,7 @@ def center_imgs(setnumb):
                         if exists(filename_check2):
                                 subprocess.call('rm -rf ' + filename_check2, shell = True) ###                                
                         continue
-		print 'output.shape', output.shape
+		#print 'output.shape', output.shape
                 #output.fill(0) ###
                 #y_length = output.shape[0] ###
                 #x_length = output.shape[1] ###
@@ -1024,12 +1039,10 @@ def center_imgs(setnumb):
                 arr_center.append(output)
                 hdu = pf.PrimaryHDU(output)
                 hdulist = pf.HDUList([hdu])
-		if i > 999:
-                        hdulist.writeto(directory + '/' + date + '/s' + str(i) + '_reduced_centered.fits', clobber=True)			
-#                        subprocess.call('/home/apps/ds9/ds9 ' + directory + '/' + date + '/s' + str(i) + '_reduced_centered.fits', shell = True) ###
-		else:
-                        hdulist.writeto(directory + '/' + date + '/s0' + str(i) + '_reduced_centered.fits', clobber=True)
-#                        subprocess.call('/home/apps/ds9/ds9 ' + directory + '/' + date + '/s0' + str(i) + '_reduced_centered.fits', shell = True) ###
+
+                hdulist.writeto(directory + '/' + date + '/s' + str(i).zfill(4) + '_reduced_centered.fits', clobber=True)
+                #subprocess.call('/home/apps/ds9/ds9 ' + directory + '/' + date + '/s' + str(i).zfill(4) + '_reduced_centered.fits', shell = True) #
+
 	print 'arr_center shape:', str(np.array(arr_center).shape)
 	img_mdn = np.median(np.array(arr_center), axis=0)
 	print img_mdn.shape
@@ -1090,7 +1103,7 @@ def run_center_imgs():
 	for setnumb in np.arange(startset, total_sets+1):
 		print 'set number', setnumb
 		center_imgs(setnumb)
-        
+
         
 def that_histo():
 	startset = 1
@@ -2303,32 +2316,18 @@ def theloci(struct):
         #------
         #load target img, divide by max pixel value
         #------
-        if i > 999:
-                filename = directory + '/' + date  + '/s' + str(int(i)) + '_reduced_centered.fits'
-                if exists(filename):
-                        try:
-                                img1 = pf.open(filename)[0].data
-                                max_pix_primary = np.amax(img1)
-                                img1 /= max_pix_primary
-                        except:
-                                print 'error opening file:', filename
-                                return 0
-                else:
-			#print filename, 'doesnt exist'
+        filename = directory + '/' + date  + '/s' + str(int(i)).zfill(4) + '_reduced_centered.fits'
+        if exists(filename):
+                try:
+                        img1 = pf.open(filename)[0].data
+                        max_pix_primary = np.amax(img1)
+                        img1 /= max_pix_primary
+                except:
+                        print 'error opening file:', filename
                         return 0
         else:
-                filename =  directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
-                if exists(filename):
-                        try:
-                                img1 = pf.open(filename)[0].data
-                                max_pix_primary = np.amax(img1)
-                                img1 /= max_pix_primary
-                        except:
-                                print 'error opening file:', filename                                
-                                return 0
-                else:
-			#print filename, 'doesnt exist'
-                        return 0
+                #print filename, 'doesnt exist'
+                return 0
         y_length, x_length = img1.shape
         center_index_y, center_index_x = int((y_length-1)/2), int((x_length-1)/2)
 
@@ -2599,7 +2598,8 @@ def save_fits(arr, filename):
         hdulist = pf.HDUList([hdu])
         hdulist.writeto(filename, clobber=True)
 
-
+def print_timenow():
+        print datetime.datetime.now().strftime('%m-%d %H:%M:%S')
 
 def plot_detlim_final(filt = True):
         #Plot final detection limits for ALL stars.
@@ -3381,6 +3381,61 @@ def get_flux_aperture(img, index, radi_ap, ret_array=False):
                 return arr_totflux
         else:
                 return tot_flux
+
+
+def get_com_aperture(img, index, radi_ap):
+        #Inputs: image(2d array), indexes(2-element(y,x) array), radius of aperture(number)
+        #Returns: total flux in aperture
+        #------
+
+        #------
+        #deciphering inputs
+        #------
+        index_y = index[0]
+        index_x = index[1]
+        j = int(radi_ap)
+
+        #------
+        #Knowing index of center, take aperture of j pixels in radius around this point
+        #Calculate center of mass pixel, return updated index
+        #------
+        arr_totflux = []
+        arr_com = []
+        for x_circ in np.arange((2*j) + 1) - j:
+                for y_circ in np.arange((2*j) + 1) - j:
+                        if distance(x_circ, 0, y_circ, 0) < (j+0.5):
+                                if index_y + y_circ >= img.shape[0] or index_x + x_circ >= img.shape[1]:
+                                        continue
+                                else:
+                                        arr_com.append([y_circ, x_circ, img[index_y+y_circ, index_x+x_circ]])
+                arr_y = []
+                arr_x = []           
+                arr_tot = []
+                print 'maximum index y, x', y, ',', x
+                for elem in arr_chunk:
+                        y_index = elem[0]
+                        x_index = elem[1]
+                        value_elem = elem[2]
+                        arr_y.append(y_index*value_elem)
+                        arr_x.append(x_index*value_elem)
+                        arr_tot.append(value_elem)
+                tot_flux = sum(arr_tot)
+                com_y = sum(arr_y)/tot_flux 
+                com_x = sum(arr_x)/tot_flux 
+                com_x += index_x #center of mass of y index in img
+                com_y += index_y #center of mass of x index in img
+                dec_com_x = com_x%1
+                dec_com_y = com_y%1
+                int_com_x = int(com_x)
+                int_com_y = int(com_y)
+
+
+def fourier_shift():
+        #fourier transform & shift
+        img = np.fft.fft2(img)
+        img = fshift(img, [-dec_com_y, -dec_com_x])
+        img = np.fft.ifft2(img)
+        img = np.real(img)
 
 
 def test_get_flux_aperture(img, index, radi_ap):
@@ -4612,43 +4667,28 @@ def run_correlation_matrix_thread():
         for index_date1 in arr_indexdate1:
                 correlation_matrix(index_date1)
         '''
+
         
 def merge_mat():
-        max_numb_imgs = 5000
-        numb_dates = 3
-
-        mat = np.zeros([numb_dates*max_numb_imgs, numb_dates*max_numb_imgs])
         filename_output = 'matrix_corr_filt.fits'
+        counter = 0
+        for index_chunk_run in np.arange(len(arr_date_ShaneAO)).astype(int):
+                filename_matrix = 'matrix_corr_filt' + str(index_chunk_run) + '.fits'
+                if not counter:
+                        mat_corr = pf.open(filename_matrix)[0].data
+                        print mat_corr.shape
+                        print 'added', filename_matrix
+                else:
+                        mat_chunk = pf.open(filename_matrix)[0].data
+                        print mat_chunk.shape
+                        mat_corr = np.vstack((mat_corr, mat_chunk))
+                        print 'added', filename_matrix
+                counter+=1
+        save_fits(mat_corr, filename_output)
 
-        for index_chunk_1d in np.arange(0, (numb_dates**2.)).astype(int):
-                index_chunk_2d = np.unravel_index(index_chunk_1d, (numb_dates, numb_dates))
-                filename_matrix = 'matrix_corr_filt' + str(int(index_chunk_1d)) + '.fits'
-                mat_chunk = pf.open(filename_matrix)[0].data
-                mat[max_numb_imgs*index_chunk_2d[0]:(max_numb_imgs*index_chunk_2d[0])+max_numb_imgs,(max_numb_imgs*index_chunk_2d[1]):(max_numb_imgs*index_chunk_2d[1])+max_numb_imgs] = mat_chunk
 
-        save_fits(mat, filename_output)
-
-
-
-def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^2)-1, where N is number of dates
-        numb_dates = len(arr_date_ShaneAO)
-        fillelement = 100 #VARIABLE
-        matrix_corr = np.zeros([max_numb_imgs, max_numb_imgs])
-        imgshape = [161,161]
-        matrix_corr.fill(fillelement)
-        len_filt_box = 21
-
-        index_chunk_2d = np.unravel_index(index_chunk_1d, (numb_dates, numb_dates))
-        filename_matrix = 'matrix_corr_filt' + str(int(index_chunk_1d)) + '.fits'
-       
-        #------
-        #check if file already exists. If yes, load it and update as needed
-        #------
-        if exists(filename_matrix):
-                matrix_corr = pf.open(filename_matrix)[0].data
-        else:
-                print filename_matrix, 'doesnt exist'
-        struct_ShaneAO_filenumbs = {} #dictionary with date index numbers as tags, array of ALL filenumbs for that date as value
+def create_books_corr():
+        struct_ShaneAO_filenumbs = {}
         for index_date in np.arange(len(arr_date_ShaneAO)): # loop through INDEX of dates
                 date = arr_date_ShaneAO[index_date] #define date for index
                 total_sets = struct_ShaneAO_total_sets[date] # define total number of sets for date
@@ -4661,18 +4701,64 @@ def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^
                         arr_filenumbs = np.append(arr_filenumbs, np.arange(start, end+1))
                 struct_ShaneAO_filenumbs[index_date] = arr_filenumbs
 
-
-
-        #------
         # Save structure containing img numbers for all dates
-        #------
         filename = 'struct_ShaneAO_filenumbs.p'
         pickle.dump(struct_ShaneAO_filenumbs, open(filename, 'wb'))        
+        print 'created:', filename
+        print '^a structure with img number for all dates'
+
+        #------
+        # Create and save array of filenumbs with dimensions = length of correlation matrix
+        #------
+        filename_filenumbs_corr = 'arr_filenumbs_corr' + '.fits'
+        filename_indexdates_corr = 'arr_indexdates_corr' + '.fits'
+        #arr_filenumbs_corr = np.zeros(matrix_corr.shape[0]*len(arr_date_ShaneAO)) 
+        arr_filenumbs_corr = np.array([]) #array of img numbs corresponding to corr matrix
+        arr_indexdates_corr = np.array([]) #array of index for dates corresponding to corr matrix
+
+        for index_datefill in np.arange(len(struct_ShaneAO_filenumbs)).astype(int):
+                arr_filenumbs_fill = struct_ShaneAO_filenumbs[index_datefill] #array of img numbs for certain date
+                arr_indexdates_fill = np.ones(arr_filenumbs_fill.size).astype(int)*index_datefill #array filled with index for certain date
+                
+                #attach date indexes and img numbs for particular date
+                arr_indexdates_corr = np.concatenate((arr_indexdates_corr, arr_indexdates_fill))
+                arr_filenumbs_corr = np.concatenate((arr_filenumbs_corr, arr_filenumbs_fill))
+        arr_indexdates_corr = arr_indexdates_corr.astype(int)
+        #saving arrs for date indexes and img numbs
+        save_fits(arr_filenumbs_corr, filename_filenumbs_corr)
+        print 'created:', filename_filenumbs_corr
+        save_fits(arr_indexdates_corr, filename_indexdates_corr)
+        print 'created:', filename_indexdates_corr
 
 
+def correlation_matrix2(index_date_run, replace_cond = True): #index chunk is anything from  0 to (N^2)-1, where N is number of dates
+        #Correlation matrix for FILTERED imgs
+        #------
+
+        numb_dates = len(arr_date_ShaneAO)
+        fillelement = 10 #VARIABLE
+        imgshape = [161,161]
+        len_filt_box = 21
+        filename_matrix = 'matrix_corr_filt' + str(int(index_date_run)) + '.fits'
+
+        filename_filenumbs_corr = 'arr_filenumbs_corr' + '.fits'
+        filename_indexdates_corr = 'arr_indexdates_corr' + '.fits'
+        filename_struct_ShaneAO_filenumbs = 'struct_ShaneAO_filenumbs.p'
+        struct_ShaneAO_filenumbs = pickle.load(open(filename_struct_ShaneAO_filenumbs, 'rb'))
+        arr_indexdates_corr = pf.open(filename_indexdates_corr)[0].data
+        arr_filenumbs_corr = pf.open(filename_filenumbs_corr)[0].data
+        if arr_indexdates_corr.size == arr_filenumbs_corr.size:
+                len_corr = arr_indexdates_corr.size #length of correlation matrix
+        else:
+                print '------'
+                print 'ERROR!'
+                print 'arr_indexdates_corr and arr_filenumbs_corr not the same size'
+                print '------'
+                return 0
  
         #------
         # Get 1D indexes of aperture around center of img, with radius = max_rad_img
+        # Later in function: will zero out primary before calculating correlation
         #------
 	img_empty = np.zeros(imgshape)
 	max_rad_ring = 4
@@ -4682,7 +4768,6 @@ def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^
                 #return: img values in aperture, array of 2d indexes for aperture
                 #------
                 ringvals, arr_ringindex_temp = return_ring(img_empty, rad_ring) 
-
                 
                 #------
                 #loop through array of 2d indexes, change them to 1d indexes
@@ -4690,79 +4775,61 @@ def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^
                 for ringindex in arr_ringindex_temp:
                         #ringindex = np.ravel_multi_index(ringindex, imgshape)
                         arr_ringindex.append(ringindex) #array of 1d indexes for center aperture of radius max_rad_ring
-                
 
+
+        arr_filenumbs_y = struct_ShaneAO_filenumbs[index_date_run]        
+        
         #------
-        # Create and save array of filenumbs with dimensions = length of correlation matrix
+        #check if file already exists. If yes, load it and update as needed
         #------
-        filename_filenumbs_corr = 'arr_filenumbs_corr' + '.fits'
-        arr_filenumbs_corr = np.zeros(matrix_corr.shape[0]*len(arr_date_ShaneAO)) #array of img numbs corresponding to corr matrix
-        for index_datefill in np.arange(len(struct_ShaneAO_filenumbs)):
-                arr_filenumbsfill = struct_ShaneAO_filenumbs[index_datefill]
-                arr_filenumbs_corr[(index_datefill*max_numb_imgs):(index_datefill*max_numb_imgs) + arr_filenumbsfill.size] = arr_filenumbsfill
-        save_fits(arr_filenumbs_corr, filename_filenumbs_corr)
+        if replace_cond:
+                matrix_corr = np.ones((arr_filenumbs_y.size,len_corr))*fillelement
+        else:
+                if exists(filename_matrix):
+                        matrix_corr = pf.open(filename_matrix)[0].data
+                else:
+                        print filename_matrix, 'doesnt exist'
+                        matrix_corr = np.ones((arr_filenumbs_y.size,len_corr))*fillelement
 
-
-
-        y_date_index = index_chunk_2d[0]
-        x_date_index = index_chunk_2d[1]
-        arr_filenumbs_y = struct_ShaneAO_filenumbs[y_date_index]
-        arr_filenumbs_x = struct_ShaneAO_filenumbs[x_date_index]
+        print 'matrix_corr.shape', matrix_corr.shape
+        counter = 0
         for index_filenumb_y in np.arange(arr_filenumbs_y.size).astype(int):
                 #------
                 # open img corresponding to index in y direction of correlation matrix
                 #------
                 filenumb_y = int(arr_filenumbs_y[index_filenumb_y])
-                if filenumb_y > 999:
-                        filename_y = directory + '/' + arr_date_ShaneAO[y_date_index] + '/' + 's' + str(filenumb_y) + '_RCF.fits'
-                        if exists(filename_y):
-                                imgy = pf.open(filename_y)[0].data
-                        else:
-                                print filename_y, 'does not exist'
-                                continue
+                filename_y = directory + '/' + arr_date_ShaneAO[index_date_run] + '/' + 's' + str(filenumb_y).zfill(4) + '_RCF.fits'
+                if exists(filename_y):
+                        imgy = pf.open(filename_y)[0].data
                 else:
-                        filename_y = directory + '/' + arr_date_ShaneAO[y_date_index] + '/' + 's0' + str(filenumb_y) + '_RCF.fits'
-                        if exists(filename_y):
-                                imgy = pf.open(filename_y)[0].data
-                        else:
-                                print filename_y, 'does not exist'
-                                continue
+                        print filename_y, 'does not exist'
+                        continue
+                        #####NOT DONE HERE
 
                 print '------'                                
                 print 'imgy', filename_y
                 print (index_filenumb_y+1)*100./(arr_filenumbs_y.size), '% done'
 
-                for index_filenumb_x in np.arange(arr_filenumbs_x.size).astype(int):
+                for index_filenumb_x in np.arange(len_corr).astype(int):
 
                         #------
                         #If correlation matrix has been filled for this, skip
                         #------
-                        if matrix_corr[index_filenumb_y, index_filenumb_x] <= (fillelement-(fillelement/100)):
+                        if matrix_corr[index_filenumb_y, index_filenumb_x] < fillelement:
+                                print 'skipping: row already filled'
                                 continue
-
-
 
                         #------
                         # open img corresponding to index in x direction of correlatin matrix
                         #------
-                        filenumb_x = int(arr_filenumbs_x[index_filenumb_x])
-                        if filenumb_x > 999:
-                                filename_x = directory + '/' + arr_date_ShaneAO[x_date_index] + '/' + 's' + str(filenumb_x) + '_RCF.fits'
-                                if exists(filename_x):
-                                        imgx = pf.open(filename_x)[0].data
-                                else:
-                                        #print filename_x, 'does not exist'
-                                        continue
+                        date_x = arr_date_ShaneAO[int(arr_indexdates_corr[index_filenumb_x])]
+                        filenumb_x = int(arr_filenumbs_corr[index_filenumb_x])
+                        filename_x = directory + '/' + date_x + '/' + 's' + str(filenumb_x).zfill(4) + '_RCF.fits'
+                        if exists(filename_x):
+                                imgx = pf.open(filename_x)[0].data
                         else:
-                                filename_x = directory + '/' + arr_date_ShaneAO[x_date_index] + '/' + 's0' + str(filenumb_x) + '_RCF.fits'
-                                if exists(filename_x):
-                                        imgx = pf.open(filename_x)[0].data
-                                else:
-                                        #print filename_x, 'does not exist'
-                                        continue
-
-                        #print 'imgx', filename_x
-
+                                #print filename_x, 'does not exist'
+                                continue
 
                         #------
                         # mask center of img with aperture
@@ -4778,8 +4845,10 @@ def correlation_matrix2(index_chunk_1d): #index chunk is anything from  0 to (N^
                         ####Get rid of middle aperture pixels when taking std
                         matrix_corr[index_filenumb_y, index_filenumb_x] = sd_img_res
                         #print matrix_corr
-        save_fits(matrix_corr, filename_matrix)
-
+                if counter%10 == 0:
+                        save_fits(matrix_corr, filename_matrix)
+                        print_timenow()
+                counter += 0
 
 '''
 def test_corr_filt():
