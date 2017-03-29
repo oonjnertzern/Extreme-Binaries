@@ -456,7 +456,7 @@ def create_stacked_mockinit():
         arr_theta = np.arange(0, 360, 60).astype(int) 
         print 'arr_theta:', arr_theta
 
-        for setnumb1 in np.arange(1, struct_ShaneAO_total_sets[date]+1).astype(int):
+        for setnumb1 in np.arange(1, struct_ShaneAO_total_sets[date]-6).astype(int): ###temporary
                 print '------'
                 print 'set:', setnumb1
                 print '------'
@@ -473,7 +473,12 @@ def create_stacked_mockinit():
 
                 for radius_mock in arr_radiusmock:
                         for theta_mock in arr_theta:
-                                filename_mockinit_output = directory + '/' + date + '/' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                filename_old = directory + '/' + date + '/' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                filename_mockinit_output = directory + '/' + date + '/set' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                if exists(filename_old):
+                                        subprocess.call('mv ' + filename_old + ' ' + filename_mockinit_output, shell = True)
+                                        continue
+
                                 arr_imgs = []
                                 for imgnumb in arr_targpsf:
                                         filename_mockinit = directory + '/' + date + '/' + str(int(imgnumb)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
@@ -534,8 +539,6 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                 #Check LOCI-subtracted img for 5 sigma value at that radius
                 #Create array of corresponding flux ratio
                 #------
-                print 'getting fluxes of stacked img before LOCI'
-                print_timenow()
                 arr_fluxratio = []
                 for rad_mock in arr_radiusmock:
                         struct_ring = check_ring(img_mdn, rad_mock)
@@ -562,41 +565,60 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                 arr_x_com_final_std = []
                 for index_rad in np.arange(arr_radiusmock.size).astype(int):
                         
-                        
                         radius_mock = arr_radiusmock[index_rad]
                         print '------'
                         print 'radius:', radius_mock
                         print_timenow()
+
                         arr_y_com_init_thetas = []
                         arr_x_com_init_thetas = []
                         arr_y_com_filt_thetas = []
                         arr_x_com_filt_thetas = []
                         arr_y_com_final_thetas = []
                         arr_x_com_final_thetas = []
-
+                        '''
                         arr_y_com_init_thetas_std = []
                         arr_x_com_init_thetas_std = []
                         arr_y_com_filt_thetas_std = []
                         arr_x_com_filt_thetas_std = []
                         arr_y_com_final_thetas_std = []
                         arr_x_com_final_thetas_std = []
-
+                        '''
                         for index_theta in np.arange(arr_theta.size).astype(int):
                                 theta_mock = arr_theta[index_theta]
-                                arr_y_com_init_frames = np.array([])
-                                arr_x_com_init_frames = np.array([])
+
                                 arr_y_com_filt_frames = np.array([])
                                 arr_x_com_filt_frames = np.array([])
-                                arr_y_com_final_frames = np.array([])
-                                arr_x_com_final_frames = np.array([])
-                                '''
-                                filename_final = directory + '/' + date  + '/' + 'set' + str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits'
-                                try:
-                                        img_final = pf.open(filename_imgfinal)[0].data
-                                except:
+
+                                
+                                filename_final_set = directory + '/' + date  + '/' + 'set' + str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits'
+                                img_final_set = pf_loadfits(filename_final_set)
+                                if not img_final_set.size:
                                         continue
+                                filename_mockinit_set = directory + '/' + date + '/set' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'                                                
+                                img_init_set = pf_loadfits(filename_mockinit_set)
+                                if not img_init_set.size:
+                                        continue
+
+                                y_length, x_length = img_final_set.shape
+                                y_index_center = int((y_length - 1)/2)
+                                x_index_center = int((x_length - 1)/2)
+
+                                #--------
+                                #Add mock binary at correct radius & angle, save img as fits file
+                                #--------
+                                dx_mock = radius_mock*np.cos(theta_mock*(2*np.pi)/360) #calculating y displacement from center
+                                dx_mock = int(round(dx_mock))
+                                dy_mock = radius_mock*np.sin(theta_mock*(2*np.pi)/360) #calculating x displacement from center
+                                dy_mock = int(round(dy_mock))
+
+                                # Get center of mass after LOCI
+                                y_com_final, x_com_final = get_com_aperture(img_final_set, (dy_mock + y_index_center , dx_mock + x_index_center), radi_apert)                                
+                                # Get center of mass before high-pass filter
+                                y_com_init, x_com_init = get_com_aperture(img_init_set, (dy_mock + y_index_center , dx_mock + x_index_center), radi_apert)
+
+
                                 '''
-                                #'''
                                 for index_imgnumb in np.arange(arr_targpsf.size).astype(int):
                                         imgnumb = arr_targpsf[index_imgnumb]
                                         percentage_imgnumb = (index_imgnumb+1.)*100/arr_targpsf.size
@@ -660,11 +682,11 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                                         y_com_final, x_com_final = get_com_aperture(img_final, (dy_mock + y_index_center , dx_mock + x_index_center), radi_apert)
                                         arr_y_com_final_frames = np.append(arr_y_com_final_frames, y_com_final)
                                         arr_x_com_final_frames = np.append(arr_x_com_final_frames, x_com_final)
-                                        '''
+
                                         if math.isnan(y_com_final) or math.isnan(x_com_final):
                                                 print 'y_com_final', y_com_final
                                                 print 'x_com_final', x_com_final
-                                        '''
+
                                         if exists(filename_mockinit):
                                                 img1 = pf.open(filename_mockinit)[0].data
                                         else:
@@ -677,11 +699,11 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
 
                                         arr_y_com_init_frames = np.append(arr_y_com_init_frames, y_com_init)
                                         arr_x_com_init_frames = np.append(arr_x_com_init_frames, x_com_init)
-                                        '''
+
                                         if math.isnan(y_com_init) or math.isnan(x_com_init):
                                                 print 'y_com_init', y_com_init
                                                 print 'x_com_init', x_com_init
-                                        '''
+
 
                                         if exists(filename_mockfilt):
                                                 img1 = pf.open(filename_mockfilt)[0].data
@@ -692,11 +714,11 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                       
                                         # Get center of mass after high pass filter
                                         y_com_filt, x_com_filt = get_com_aperture(img1, (dy_mock + y_index_center , dx_mock + x_index_center), radi_apert)
-                                        '''
+
                                         if math.isnan(y_com_filt) or math.isnan(x_com_filt):
                                                 print 'y_com_filt', y_com_filt
                                                 print 'x_com_filt', x_com_filt
-                                        '''
+                                                
                                         if not exists(filename_mockfilt):
                                                 save_fits(img1, filename_mockfilt)
 
@@ -713,39 +735,47 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                                 arr_y_com_final_thetas_std.append(np.std(arr_y_com_final_frames))
                                 arr_x_com_final_thetas_std.append(np.std(arr_x_com_final_frames))
 
-                                arr_y_com_init_thetas.append(np.mean(arr_y_com_init_frames))
-                                arr_x_com_init_thetas.append(np.mean(arr_x_com_init_frames))
                                 arr_y_com_filt_thetas.append(np.mean(arr_y_com_filt_frames))
                                 arr_x_com_filt_thetas.append(np.mean(arr_x_com_filt_frames))
-                                arr_y_com_final_thetas.append(np.mean(arr_y_com_final_frames))
-                                arr_x_com_final_thetas.append(np.mean(arr_x_com_final_frames))
-                                #'''
+                                '''
+                                arr_y_com_init_thetas.append(y_com_init)
+                                arr_x_com_init_thetas.append(x_com_init)
+                                
+                                arr_y_com_final_thetas.append(y_com_final)
+                                arr_x_com_final_thetas.append(x_com_final)
+                               
+                        
                         arr_y_com_init.append(arr_y_com_init_thetas)
                         arr_x_com_init.append(arr_x_com_init_thetas)
-                        arr_y_com_filt.append(arr_y_com_filt_thetas)
-                        arr_x_com_filt.append(arr_x_com_filt_thetas)
+
                         arr_y_com_final.append(arr_y_com_final_thetas)
                         arr_x_com_final.append(arr_x_com_final_thetas)
-
+                        '''
                         arr_y_com_init_std.append(arr_y_com_init_thetas_std)
                         arr_x_com_init_std.append(arr_x_com_init_thetas_std)
                         arr_y_com_filt_std.append(arr_y_com_filt_thetas_std)
                         arr_x_com_filt_std.append(arr_x_com_filt_thetas_std)
                         arr_y_com_final_std.append(arr_y_com_final_thetas_std)
                         arr_x_com_final_std.append(arr_x_com_final_thetas_std)
-
+                        '''
                 '''
                 print len(arr_y_com_init)
                 print len(arr_x_com_init)
                 print len(arr_y_com_filt)
                 print len(arr_x_com_filt)
                 '''
+                
                 arr_y_com_init = np.array(arr_y_com_init)
+                print 'arr_y_com_init', arr_y_com_init
                 arr_x_com_init = np.array(arr_x_com_init)
+                print 'arr_x_com_init', arr_x_com_init
+                arr_y_com_final = np.array(arr_y_com_final)
+                print 'arr_y_com_final', arr_y_com_final
+                arr_x_com_final = np.array(arr_x_com_final)
+                print 'arr_x_com_final', arr_x_com_final
+                '''
                 arr_y_com_filt = np.array(arr_y_com_filt)
                 arr_x_com_filt = np.array(arr_x_com_filt)
-                arr_y_com_final = np.array(arr_y_com_final)
-                arr_x_com_final = np.array(arr_x_com_final)
 
                 arr_y_com_init_std = np.array(arr_y_com_init_std)
                 arr_x_com_init_std = np.array(arr_x_com_init_std)
@@ -753,12 +783,22 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                 arr_x_com_filt_std = np.array(arr_x_com_filt_std)
                 arr_y_com_final_std = np.array(arr_y_com_final_std)
                 arr_x_com_final_std = np.array(arr_x_com_final_std)
-                
-                foldername = 'com/'
-                filename_y_init = foldername + 'arr_y_com_init_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
-                save_fits(arr_y_com_init, filename_y_init)
-                filename_x_init = foldername + 'arr_x_com_init_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
-                save_fits(arr_x_com_init, filename_x_init)
+                '''
+                try:
+                        foldername = 'com/'
+                        filename_y_init = foldername + 'arr_y_com_init_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
+                        save_fits(arr_y_com_init, filename_y_init)
+                        filename_x_init = foldername + 'arr_x_com_init_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
+                        save_fits(arr_x_com_init, filename_x_init)
+                        filename_y_final = foldername + 'arr_y_com_final_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
+                        save_fits(arr_y_com_final, filename_y_final)
+                        filename_x_final = foldername + 'arr_x_com_final_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
+                        save_fits(arr_x_com_final, filename_x_final) 
+                except:
+                        print 'something went wrong with saving files'
+
+                '''
+
                 filename_y_filt = foldername + 'arr_y_com_filt_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
                 save_fits(arr_y_com_filt, filename_y_filt)
                 filename_x_filt = foldername + 'arr_x_com_filt_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
@@ -766,8 +806,9 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                 filename_y_final = foldername + 'arr_y_com_final_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
                 save_fits(arr_y_com_final, filename_y_final)
                 filename_x_final = foldername + 'arr_x_com_final_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
-                save_fits(arr_x_com_final, filename_x_final)
-
+                save_fits(arr_x_com_final, filename_x_final) 
+                '''
+                '''
                 filename_y_init_std = foldername + 'arr_y_com_init_std_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
                 save_fits(arr_y_com_init_std, filename_y_init_std)
                 filename_x_init_std = foldername + 'arr_x_com_init_std_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
@@ -780,7 +821,7 @@ def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
                 save_fits(arr_y_com_final_std, filename_y_final_std)
                 filename_x_final_std = foldername + 'arr_x_com_final_std_' + '_' + 'setnumb' + str(int(setnumb1)) + '_' + date + '.fits'
                 save_fits(arr_x_com_final_std, filename_x_final_std)
-
+                '''
 
 def plot_histo_com():
         arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
@@ -870,7 +911,6 @@ def plot_histo_com():
                         max_angle_shift_radians = 0.4
                         arr_angle_filt = np.append(arr_angle_filt, angle_shift_filt[np.where(np.abs(angle_shift_filt)<max_angle_shift_radians)])
                         arr_angle_final = np.append(arr_angle_final, angle_shift_final[np.where(np.abs(angle_shift_final)<max_angle_shift_radians)])
-
                         '''
                         #load files for std of com
                         arr_y_init_std_setnumb = pf_loadfits(filename_y_init_std, print_cond = True)
@@ -912,13 +952,13 @@ def plot_histo_com():
                 plt.xlabel('Shift in radius (After LOCI)')
                 plt.title('Radial shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
                 #plt.show()
-                plt.savefig("/home/jjoon/rad"+str(int(arr_radiusmock[index_rad]))+".png", dpi = 200)
+                plt.savefig("/home/jjoon/rad"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
 
                 plt.close()
                 plt.hist(arr_angle_final, bins = n_bins)
                 plt.xlabel('Shift in angle (After LOCI)')
                 plt.title('Azimuth shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
-                plt.savefig("/home/jjoon/angle"+str(int(arr_radiusmock[index_rad]))+".png", dpi = 200)
+                plt.savefig("/home/jjoon/angle"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
                 #plt.show()
                 
                 #useless = raw_input('enter key to continue')
@@ -933,6 +973,11 @@ def pf_loadfits(filename_img, print_cond = False):
                 if print_cond:
                         print filename_img, 'doesnt exist'
                 return np.array([])
+
+def run_loci_date():
+        for setnumb in np.arange(1, struct_ShaneAO_total_sets[date] +1 ).astype(int):
+                run_loci_mockbins(setnumb, bin_cond = False, faint_cond = False, replace_cond = True)
+
 
 
 def run_loci_mockbins(setnumb1, input_radiusmock = 0, bin_cond = True, faint_cond = False, replace_cond = True):
@@ -1046,12 +1091,13 @@ def run_loci_mockbins(setnumb1, input_radiusmock = 0, bin_cond = True, faint_con
         #------
         # Add reference filenumbs from all dates
         #------
+        print 'adding reference img numbers from all dates...'
         arr_substar = []
         for index_date in np.arange(len(arr_date_ShaneAO)):
                 date_ref = arr_date_ShaneAO[index_date]
                 total_sets = struct_ShaneAO_total_sets[date_ref]
                 print '------'
-                print 'total_sets', total_sets
+                print 'date:', date_ref, 'total_sets', total_sets
                 arr_substar_temp = np.array([]) #array for adding ref psf filenames
                 for setnumb2 in np.arange(1,total_sets+1):
                         if setnumb2 == int(setnumb1) and index_date_targ == index_date:
