@@ -81,6 +81,31 @@ max_numb_imgs = 5000
 #merge_mat() to merge
 #------------------
 
+def print_stuff(): ####TEMP
+        for date_targ in arr_date_ShaneAO:
+                #print '------'
+                #print date_targ
+                #print '------'
+                print '. '
+                print '. '
+                for setnumb1 in np.arange(1, struct_ShaneAO_total_sets[date_targ]+1).astype(int):
+                        #print setnumb1
+                        with open(directory + '/' + date_targ + '/set_'+ str(int(setnumb1)) +'_info.txt', 'rb') as f_temp:
+                                arr_startend1 = f_temp.read().splitlines()
+                                #print arr_startend1
+                        start1 = int(arr_startend1[0])
+                        end1 = int(arr_startend1[1])
+                        starname = str(arr_startend1[2])
+                        '''
+                        try:
+                                filtername = str(arr_startend1[3])
+                                print filtername
+                        except:
+                                continue #print '.'
+                        '''
+                        numb_imgs = end1-start1+1
+                        filtername = ret_filtername(start1, date_targ)
+                        print filtername
 
 def create_info(date = date):
         filename_setinfo = directory + '/' + date + '/' + 'set_' + str(int(setnumb1)) +'_info.txt'
@@ -125,8 +150,8 @@ def create_txt(date = date):
 def print_filters():
         print 'dealing with', date
 	arr_filternames = []
-	#for i in np.arange(1, max_numb_imgs): #CHANGE ACCORDINGLY
-        for i in np.arange(119, 218): #CHANGE ACCORDINGLY
+	for i in np.arange(1, max_numb_imgs): #CHANGE ACCORDINGLY
+        #for i in np.arange(119, 218): #CHANGE ACCORDINGLY
 
                 #load img file
                 filename = directory + '/' + date + '/' + 's' + str(i).zfill(4) + '.fits'
@@ -2468,7 +2493,7 @@ def test_theta(theta_mock):
         subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)
 
 
-def theloci(struct):
+def theloci(struct): #error tag: #tlo#
         #------
         #load variables from input structure, create arr_rad with appropriate starting subtraction radii
         #------
@@ -2489,7 +2514,7 @@ def theloci(struct):
                 radius_mock = struct['rad_mock']
                 mock_factor = struct['fluxratio']
                 theta_mock = struct['theta_mock']
-                filename_output = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #!!!!!!***filt Change name if not using filt #faint***
+                filename_output = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #!!!!!!***filt Change name if not using filt #faint*** #tlo#
                 print 'starting', i, 'radius mock:', radius_mock, ',', 'theta', theta_mock, '...', datetime.datetime.now().strftime('%m-%d %H:%M:%S')
         else:
                 filename_output = directory + '/' + date + '/' + str(i) + 'locifiltfinal' + '.fits'#!!!!!!***filt Change name if not using filt
@@ -2548,9 +2573,20 @@ def theloci(struct):
 
                         img1 += img_mock #Add binary to primary        
 
-        img1 *= max_pix_primary  # Multiply by primary max pixel value from before
+                filename_mockinit = directory + '/' + date + '/' + str(int(i)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                pf_savefits(img1, filename_mockinit)
+
+        img1 *= max_pix_primary  # Multiply by primary max pixel value from before 
         img1 -= medfilt(img1, [len_filt_box, len_filt_box]) # Perform high-pass filter on img
         img1 /= np.amax(img1) # Normalize img using new max pixel value
+
+
+        # save file after high-pass filter as fits fils
+        if struct['bin_cond']:
+                filename_mockfilt = directory + '/' + date + '/' + str(int(i)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockfilt.fits'
+                pf_savefits(img1, filename_mockfilt)
+
+
 
 
         #--------|
@@ -2707,8 +2743,9 @@ def loci_gen(img1, radius_sub, radius_op, arr_img2, filename_output):
 
 
 
-def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True):
-        startset = 11 #faint***
+def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True): #error tag: #rcflm#
+        #startset = 12 #faint*** #rcflm#
+        startset = 1
         arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
         arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
         print 'arr_radiusmock', arr_radiusmock
@@ -2729,14 +2766,14 @@ def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True)
 
                                 arr_for_mdn = []
                                 if highpassfilt:
-                                        filename_output = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locifaintmockfiltfinal.fits' #faint***
+                                        filename_output = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #faint***
                                 else:
                                         filename_output = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
 
 
                                 for i in arr_targpsf:
                                         if highpassfilt:
-                                                filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locifaintmockfiltfinal.fits' #faint***
+                                                filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #faint***
                                         else:
                                                 filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
                                         try:
@@ -2765,6 +2802,7 @@ def save_fits(arr, filename):
 
 def print_timenow():
         print datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+
 
 def plot_detlim_final(filt = True):
         #Plot final detection limits for ALL stars.
@@ -3107,10 +3145,10 @@ def plot_correction(date = date):
 
 
 
-
-def plot_detlim_loci(filt = True, total_sets = total_sets):
-        if filt:
-                total_sets = 12
+def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
+        #if filt: #pdl
+        #        total_sets = 12
+        startset = 13 #pdl
 
         #------
         #Define radius of aperture
@@ -3174,19 +3212,6 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                         img_subed_filt = pf.open(filename_fits_filt)[0].data
                 else:
                         filename_plot = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_plot.png'
-
-
-
-                #------
-                #Define and load img after loci without high pass filter
-                #------
-                filename_fits = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_locifinal.fits'
-                if exists(filename_fits):
-                        img_subed = pf.open(filename_fits)[0].data
-                else:
-                        print filename_fits, 'doesnt exist'
-                        continue
-
                 
 
                 #------
@@ -3206,7 +3231,6 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                 x_index_center_avg = int((x_length_avg - 1)/2)
                 flux_main = get_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
                 print 'flux_main', flux_main
-
 
 
                 #------
@@ -3267,7 +3291,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                 #------
                 # Run get_flux_aperture to find number of pixels in aperture
                 #------
-                img_zeros = np.zeros(img_subed.shape)
+                img_zeros = np.zeros(img_subed_filt.shape)
                 arr_empty_apert = get_flux_aperture(img_zeros, [y_index_center_avg, x_index_center_avg], radi_apert, True)
                 num_pix_apert = len(arr_empty_apert)
 
@@ -3287,10 +3311,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                         for elem in arr_index:
                                 y_apert_center = elem[0] + y_index_center_avg
                                 x_apert_center = elem[1] + x_index_center_avg
-                                if filt:
-                                        array_flux_apert_radi = get_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
-                                else:
-                                        array_flux_apert_radi = get_flux_aperture(img_subed, [y_apert_center, x_apert_center], radi_apert)
+                                array_flux_apert_radi = get_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
                                 arr_flux_radi.append(array_flux_apert_radi)
                         #print 'arr_flux_radi', arr_flux_radi
                         sd_ring_r = np.std(np.array(arr_flux_radi))
@@ -3298,10 +3319,10 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                         arr_sd.append(sd_ring_r)
                         arr_5sd.append(sd_ring_r*5)
 
-                        struct_ring = check_ring(img_subed, rad_mock)
+                        struct_ring = check_ring(img_subed_filt, rad_mock)
                         sd_ring_formocks = struct_ring['sd_ring']
                         mock_factor = sd_ring_formocks*50
-                        img_mock = pf.open(directory + '/' + date + '/' + 'centroid_1.fits')[0].data
+                        img_mock = pf.open(directory + '/' + 'Jun15' + '/' + 'centroid_1.fits')[0].data
                         img_mock /= np.amax(img_mock)
                         img_mock *= float(mock_factor)
                         flux_bin_init = get_flux_aperture(img_mock, [y_index_center_avg, x_index_center_avg], radi_apert)
@@ -3344,8 +3365,6 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                                         print 'File not found:', filename_final
                                         continue
 
-
-
                                 #------
                                 # find x and y index at center of image
                                 # then use radius_mock and theta_mock to get index of mock binary
@@ -3370,8 +3389,9 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                         arr_sd.append(sd_r)
 
                 print 'arr_sd', arr_sd
+                arr_mag_sd = 2.5*np.log10(np.sqrt( (np.array(arr_sd)**2.) + (np.array(arr_5sd_err)**2.) ))
                 print 'arr_5sd_err', arr_5sd_err
-                arr_mag_final_err = 2.5*np.log10(np.sqrt( (np.array(arr_sd)**2.) + (np.array(arr_5sd_err)**2.) ))
+                arr_mag_final_err = 2.5*np.log10(np.sqrt( (np.array(arr_sd)**-2.) + (np.array(arr_5sd_err)**2.) )) # exponent for arr_sd is -2, since we need to invert flux ratio
 
                 arr_fluxratio_final = flux_main/arr_avg_fluxbin
                 arr_mag_init = 2.5*np.log10(arr_fluxratio_init)
@@ -3385,33 +3405,35 @@ def plot_detlim_loci(filt = True, total_sets = total_sets):
                 #------
                 # Plot curves
                 #------
-                
+                plt.close()
                 mag_pre, = plt.plot(arr_radiusmock, arr_mag_5sd_pre, 'ko-') #5 s.d. before subtraction
                 mag_init, = plt.plot(arr_radiusmock, arr_mag_init, 'bo-') #Mag. of mock binary before injection
                 mag_afterloci, = plt.plot(arr_radiusmock, arr_mag_final, 'ro-') #Mag. of binary after LOCI
                 mag_5sd, = plt.plot(arr_radiusmock, arr_mag_5sd,'yo-') #5 s.d. before correction
                 mag_5sd_correct, = plt.plot(arr_radiusmock, arr_mag_5sd - arr_mag_diff,'go-') #5 s.d. after correction
-                plt.errorbar(arr_radiusmock, arr_mag_5sd - arr_mag_diff, yerr = arr_mag_final_err, ecolor = 'g')
+                print 'mag_5sd_correct', arr_mag_5sd - arr_mag_diff
+                #useless = raw_input('stopped...')
+                #plt.errorbar(arr_radiusmock, arr_mag_5sd - arr_mag_diff, yerr = arr_mag_final_err, ecolor = 'g', color ='g') ### FIX ######
                 plt.gca().invert_yaxis()
                 plt.legend([mag_pre, mag_init, mag_afterloci, mag_5sd, mag_5sd_correct], ['5 s.d. before subtraction', 'Mag. of mock binary before injection', 'Mag. of binary after LOCI', '5 s.d. before correction', '5 s.d. after correction'])
                
-                plt.show()
-
-
+                #plt.show() ####
+                plt.savefig('/home/jjoon/meeting_4Apr/' + 'set' + str(int(setnumb1)) + 'plotfilt.png')
+                plt.close()
                 #------
                 # Append corrected 5sd plots to rows in a table. Save as fits file.
                 #-----
                 if counter > 50:
                         arr_5sd_correct.append(arr_mag_5sd - arr_mag_diff)
                         arr_correction_save = np.append(arr_correction_save, np.array([arr_mag_diff]), axis = 0)
-                        arr_correction_err_save = np.append(arr_correction_err_save, np.array([arr_mag_sd]), axis = 0)
+                        #arr_correction_err_save = np.append(arr_correction_err_save, np.array([arr_mag_sd]), axis = 0)
                 print 'number of images used:', counter
-                #mng = plt.get_current_fig_manager()                                         
-                #mng.resize(*mng.window.maxsize())
+                mng = plt.get_current_fig_manager()                                         
+                mng.resize(*mng.window.maxsize())
                 #plt.show()
-                #plt.savefig(filename_plot, bbox_inches='tight')
-                #print 'saved plot as img:', filename_plot
-                #plt.close()
+                plt.savefig(filename_plot, bbox_inches='tight')
+                print 'saved plot as img:', filename_plot
+                plt.close()
                 
 
                 hdu = pf.PrimaryHDU(np.array(arr_correction_save))
