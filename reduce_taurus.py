@@ -24,7 +24,7 @@ ds9_taurus = '/Users/gduchene/Applications/Ureka/bin/ds9 '
 #or different telescope
 #or changes to img files e.g. new stars added
 directory = 'ShaneAO'
-date = 'Nov15'
+date = 'Mar16'
 arr_date_ShaneAO = ['Jun15', 'Nov15', 'Mar16', 'Sep16', 'Oct16']
 struct_ShaneAO_total_sets = {'Jun15':28, 'Nov15':25, 'Mar16':25, 'Sep16':19, 'Oct16':5}
 total_sets = struct_ShaneAO_total_sets[date]
@@ -253,9 +253,9 @@ def create_dark():
 
 def median_it(arr_filenumbs, str_before = directory + '/' + date + '/' + 's', str_after = '.fits'):
         arr_mdn = []
-        print arr_filenumbs
+        print 'taking median of imgs:', arr_filenumbs
         for i in arr_filenumbs:
-		print i
+		#print i
                 filename = str_before + str(i).zfill(4) + str_after
                 if exists(filename):
                         #with pf.open(filename, memmap = False) as fits:
@@ -1561,7 +1561,7 @@ def center_star(img, len_half_center = len_half_center): #error tag: #cst#
         arr_y = []
         arr_x = []           
         arr_tot = []
-        print 'maximum index y, x', y, ',', x
+        print 'maximum index y, x:', y, ',', x
         for elem in arr_chunk:
                 y_index = elem[0]
                 x_index = elem[1]
@@ -1572,8 +1572,8 @@ def center_star(img, len_half_center = len_half_center): #error tag: #cst#
         tot_flux = sum(arr_tot)
         com_y = sum(arr_y)/tot_flux 
         com_x = sum(arr_x)/tot_flux 
-        com_x += x #center of mass y index in img
-        com_y += y #center of mass x index in img
+        com_x += x #center of mass x index in img
+        com_y += y #center of mass y index in img
         dec_com_x = com_x%1
         dec_com_y = com_y%1
         int_com_x = int(com_x)
@@ -1584,7 +1584,42 @@ def center_star(img, len_half_center = len_half_center): #error tag: #cst#
         img = fshift(img, [-dec_com_y, -dec_com_x])
         img = np.fft.ifft2(img)
         img = np.real(img)
-        output = img[int_com_y-len_half_center:int_com_y+len_half_center+1,int_com_x-len_half_center:int_com_x+len_half_center+1]
+        shape_y_img, shape_x_img = img.shape
+
+        img_template = np.zeros([2*len_half_center+1, 2*len_half_center+1])
+        y_shape_template, x_shape_template = img_template.shape
+        index_y_center_template, index_x_center_template = len_half_center, len_half_center
+        index_y_start_template_offset, index_x_start_template_offset = -len_half_center, -len_half_center
+        index_y_end_template_offset, index_x_end_template_offset = len_half_center+1, len_half_center+1
+
+        #for cropping img
+        index_y_start = int_com_y-len_half_center
+        index_y_end = int_com_y+len_half_center+1
+        index_x_start = int_com_x-len_half_center
+        index_x_end = int_com_x+len_half_center+1
+        
+        if index_y_start < 0:
+                index_y_start = 0
+                index_y_start_template_offset = -int_com_y
+
+        if index_x_start < 0:
+                index_x_start = 0
+                index_x_start_template_offset = -int_com_x
+
+        if index_y_end > shape_y_img:
+                index_y_end_template_offset = shape_y_img - int_com_y 
+        if index_x_end > shape_x_img:
+                index_x_end_template_offset = shape_x_img - int_com_x 
+        
+        img_cropped = img[index_y_start:index_y_end,index_x_start:index_x_end]
+        print '------'
+        print 'img_cropped.shape'
+        print img_cropped.shape
+        print '------'
+        print img_template[index_y_center_template + index_y_start_template_offset:index_y_center_template + index_y_end_template_offset, index_x_center_template + index_x_start_template_offset:index_x_center_template + index_x_end_template_offset].shape
+        print '------'
+        img_template[index_y_center_template + index_y_start_template_offset:index_y_center_template + index_y_end_template_offset, index_x_center_template + index_x_start_template_offset:index_x_center_template + index_x_end_template_offset] += img_cropped
+        output = img_template
         return output
         
 def run_create_sky():
@@ -1730,22 +1765,16 @@ def run_subframe():
                 psf_subtract_frame(elem)
         '''
 
-
-def process_calbins(): #error tag: #pcl# #CONTINUE
-        #performs sky subtraction, flat-fielding, centering of calibration binaries
-        #imgs must be larger in order to contain wide binaries
-        #define len_half_enter_calbin below
-
-        len_half_center_calbin = 200 #radius away from primary to contain within img.
-
+def print_calbin(): #TEMP#
         arr_dates = []
         for index_date in np.arange(len(arr_date_ShaneAO)).astype(int): #looping through each date
                 date_targ = arr_date_ShaneAO[index_date]
+                #print date_targ
+
                 #------
                 #open txt file with calibration binaries' img numbers
                 #------
                 filename_txt = directory + '/' + date_targ + '/' + 'calibration_binaries_' + date_targ + '.txt'
-                arr_binstruct = []
                 if exists(filename_txt): 
 
                         #load txt file as list, with each row as one element of list
@@ -1764,6 +1793,7 @@ def process_calbins(): #error tag: #pcl# #CONTINUE
                                 row = arr_bin[index_row]
                                 if row[:4] == 'NAME':
                                         struct_temp['name'] = row[6:]
+                                        #print row[6:]
                                 elif not row:
                                         arr_structbin.append(struct_temp)
                                         struct_temp = {}
@@ -1772,12 +1802,142 @@ def process_calbins(): #error tag: #pcl# #CONTINUE
                                         try:
                                                 arr_imgnumbs = [int(imgnumb) for imgnumb in arr_bin[index_row].split(' ')]
                                                 struct_temp[counter_star] = arr_imgnumbs
+                                                if counter_star == 1:
+                                                        imgnumb1 = arr_imgnumbs[0]
+                                                        filename_imgnumb1 = directory + '/' + date_targ + '/' + 's' + str(imgnumb1).zfill(4) + '.fits'
+                                                        img_hdr = pf.open(filename_imgnumb1)[0].header
+                                                        #for key in img_hdr:
+                                                        #        print key
+                                                        time_obs = img_hdr['TIME-OBS']
+                                                        print time_obs
+                                                        #useless = raw_input('enter key to continue')
                                                 counter_star += 1
                                         except:
                                                 print '------'
                                                 print 'problem with row', int(index_row+1), 'in', filename_txt
                                                 print '------'
 
+
+def ret_separation_calbins(): #error tag: #rsc# #CONTINUE
+        # Prints separation in y,x and radius,separation angle
+        # Do so for all calibration binaries
+
+        radi_apert = 6
+        radi_apert_mask = 5
+        const_mask = 0
+
+        counter_calbin = 1
+        cond_calbin_numb = True
+        while cond_calbin_numb:
+                counter_calbin_pos = 1
+                cond_calbin_posnumb = True
+                arr_y_sep_avg = []
+                arr_x_sep_avg = []
+                arr_angle_sep_avg = []
+                arr_rad_sep_avg = []
+                while cond_calbin_posnumb:
+                        filename_calbin_mdn_centered = filename_centered_calbin = directory + '/' + 'Calibration_Binaries' + '/' + 'calbin_' + str(counter_calbin) + '_RCpos' + str(counter_calbin_pos) + '.fits'
+                        if exists(filename_calbin_mdn_centered):
+                                '''
+                                cond_ds9 = raw_input('Type something to open DS9, press ENTER to skip.')
+                                if cond_ds9:
+                                        subprocess.call('/home/apps/ds9/ds9 ' + filename_calbin_mdn_centered, shell = True)
+                                '''
+                                '''
+                                str_y_guess = raw_input('Estimated y of binary center: ')
+                                str_x_guess = raw_input('Estimated x of binary center: ')
+                                y_guess, x_guess = int(str_y_guess), int(str_x_guess)
+                                img = pf_loadfits(filename_calbin_mdn_centered)
+                                com_y, com_x = get_com_aperture(img, (y_guess, x_guess), radi_apert)
+                                index_center_y, index_center_x = int((img.shape[0]-1)/2), int((img.shape[1]-1)/2)
+                                sep_y, sep_x = com_y -index_center_y, com_x - index_center_x
+                                print 'separation in y,x:', sep_y, sep_x
+                                '''
+                                img = pf_loadfits(filename_calbin_mdn_centered)
+                                index_center = int((img.shape[0]-1)/2), int((img.shape[1]-1)/2)
+                                img = mask_aperture(img, index_center, radi_apert_mask, const_mask) #mask center star, leaving only companion
+                                index_maxpixval_1d = np.argmax(img) #index of max pixel value after masking
+                                index_maxpixval_2d = np.unravel_index(index_maxpixval_1d, img.shape)
+                                #print '------'
+                                #print 'max pixel index(y,x:)', index_maxpixval_2d
+                                com_y, com_x = get_com_aperture(img, index_maxpixval_2d, radi_apert)
+                                #print 'binary companion index(y,x):', com_y, ',', com_x
+                                index_center_y, index_center_x = index_center
+                                sep_y, sep_x = com_y - index_center_y, com_x - index_center_x
+                                arr_y_sep_avg.append(sep_y)
+                                arr_x_sep_avg.append(sep_x)
+                                angle_sep = np.arctan2(sep_y, sep_x) #separation angle
+                                rad_sep = np.sqrt((sep_y**2.) + (sep_x**2.)) #separation distance
+                                arr_angle_sep_avg.append(angle_sep)
+                                arr_rad_sep_avg.append(rad_sep)
+                                #subprocess.call('/home/apps/ds9/ds9 ' + filename_calbin_mdn_centered, shell = True)
+                                counter_calbin_pos += 1
+                        else:
+                                cond_calbin_posnumb = False
+                                counter_calbin += 1
+                print np.mean(arr_angle_sep_avg)*360./(2*math.pi) #rsc# #TEMP# Change depending on wanted output
+                filename_pos1 = filename_centered_calbin = directory + '/' + 'Calibration_Binaries' + '/' + 'calbin_' + str(counter_calbin) + '_RCpos1' + '.fits'
+                if not exists(filename_pos1):
+                        print filename_pos1, 'doesnt exist' 
+                        cond_calbin_numb = False 
+
+
+def process_calbins(): #error tag: #pcl#
+        #performs sky subtraction, flat-fielding, centering of calibration binaries
+        #imgs must be larger in order to contain wide binaries
+        #define len_half_enter_calbin below
+
+        len_half_center_calbin = 250 #radius away from primary to contain within img.
+
+        arr_dates = []
+        counter_calbin = 1
+        for index_date in np.arange(len(arr_date_ShaneAO)).astype(int): #looping through each date
+                date_targ = arr_date_ShaneAO[index_date]
+                #------
+                #open txt file with calibration binaries' img numbers
+                #------
+                filename_txt = directory + '/' + date_targ + '/' + 'calibration_binaries_' + date_targ + '.txt'
+                if exists(filename_txt): 
+
+                        #load txt file as list, with each row as one element of list
+                        with open(filename_txt, 'rb') as f: 
+                                arr_bin = f.read().splitlines()
+                        
+                        #------
+                        # create array of structures
+                        # each structure contains calibration binary names,
+                        # and img file numbers for each position
+                        # arr_structbin only containts info for one date at a time.
+                        #------
+                        arr_structbin = []
+                        struct_temp = {}
+                        counter_star = 1
+                        for index_row in np.arange(len(arr_bin)).astype(int):
+                                row = arr_bin[index_row]
+                                if not row:
+                                        print struct_temp['name']
+                                        arr_structbin.append(struct_temp)
+                                        struct_temp = {}
+                                        counter_star = 1
+                                else:
+                                        try:
+                                                arr_imgnumbs = [int(imgnumb) for imgnumb in arr_bin[index_row].split(' ')]
+                                                struct_temp[counter_star] = arr_imgnumbs
+                                                str_imgnumb1 = str(arr_imgnumbs[0])
+                                                filename_img1 = directory + '/' + date_targ + '/' + 's' + str_imgnumb1.zfill(4) + '.fits'
+                                                hdr_img1 = pf.open(filename_img1)[0].header
+                                                struct_temp['name'] = hdr_img1['OBJECT']
+                                                counter_star += 1
+                                        except:
+                                                continue
+                                                #print '------'
+                                                #print 'problem with row', int(index_row+1), 'in', filename_txt
+                                                #print '------'
+                        if len(struct_temp):
+                                print struct_temp['name']
+                                arr_structbin.append(struct_temp)
+                                struct_temp = {}
+                        #Don't delete
                         #------
                         # Create sky imgs for all positions
                         # There are typically 2 positions per binary pair
@@ -1797,6 +1957,7 @@ def process_calbins(): #error tag: #pcl# #CONTINUE
                                                 counter_sky += 1
                                         else:
                                                 end_cond = True
+                        
 
                         for index_structbin in np.arange(len(arr_structbin)).astype(int):
                                 struct_bin = arr_structbin[index_structbin]
@@ -1830,34 +1991,49 @@ def process_calbins(): #error tag: #pcl# #CONTINUE
                                                         continue
 
                                                 img = img[region_y_min_index:region_y_max_index,region_x_min_index:region_x_max_index]
-                                                print 'np.amax(img_sky)', np.amax(img_sky)
+                                                #print 'np.amax(img_sky)', np.amax(img_sky)
                                                 img2 = (img-img_sky)/(img_flat)
                                                 filename_reduced = directory + '/' + date_targ + '/' + 's' + str(imgnumb).zfill(4) + '_reduced_.fits'
                                                 pf_savefits(img2, filename_reduced)
                                                 img_centered = center_star(img2, len_half_center_calbin)
-                                                print img_centered
+                                                #print img_centered
+                                                
                                                 if img_centered.shape != (2*len_half_center_calbin + 1, 2*len_half_center_calbin +1): 
-                                                        print 'img shape aint right. CHECK'
-                                                        print img_centered.shape
+                                                        #print 'img shape aint right. CHECK'
+                                                        #print 'cropped img shape:', img_centered.shape
                                                         filename_test = 'test.fits'
                                                         pf_savefits(img_centered, filename_test)
                                                         subprocess.call('/home/apps/ds9/ds9 ' + filename_reduced, shell = True)
                                                         #subprocess.call('/home/apps/ds9/ds9 ' + filename_test, shell = True)
                                                         useless = raw_input('enter key to continue')
                                                         continue
+                                                
                                                 filename_centered = directory + '/' + date_targ + '/' + 's' + str(imgnumb).zfill(4) + '_reduced_centered.fits'
                                                 pf_savefits(img_centered, filename_centered)
-                                                #subprocess.call('/home/apps/ds9/ds9 ' + filename_centered, shell = True)
+                                        str_before = directory + '/' + date_targ + '/' + 's'
+                                        str_after = '_reduced_centered.fits'
+                                        filename_calbin_mdn_centered = directory + '/' + 'Calibration_Binaries' + '/' + 'calbin_' + str(counter_calbin) + '_RCpos' + str(counter_sky) + '.fits' # '_' + struct_bin['name'] + 
+                                        img_mdn_centered = median_it(arr_imgnumbs, str_before, str_after)
+                                        pf_savefits(img_mdn_centered, filename_calbin_mdn_centered)
+                                        file_img = pf.open(filename_calbin_mdn_centered, mode = 'update')
+                                        img_hdr = file_img[0].header
+                                        img_hdr['OBJECT'] = struct_bin['name']
+                                        file_img.flush()
+                                        file_img.close()
+                                        #hdulist.writeto(filename_calbin_mdn_centered)
+                                counter_calbin += 1
+                                        #subprocess.call('/home/apps/ds9/ds9 ' + filename_centered, shell = True)
+        print counter_calbin-1
 
 
-
+        '''
                         # #TEMP# Delete when done
                         for struct_bin in arr_structbin:
                                 for key in struct_bin:
                                         print key
+        '''
 
-
-
+        '''
                         arr_bin_startnumb = filter(None, np.array(arr_bin[0::3]))
                         arr_bin_endnumb = filter(None, np.array(arr_bin[1::3]))
                         arr_bin_starname = filter(None, np.array(arr_bin[2::3]))
@@ -1905,7 +2081,7 @@ def process_calbins(): #error tag: #pcl# #CONTINUE
                                         filename_centered = directory + '/' + date_targ + '/' + 's' + str(imgnumb).zfill(4) + '_reduced_centered.fits'
                                         pf_savefits(img_centered, filename_centered)
                                         #subprocess.call('/home/apps/ds9/ds9 ' + filename_centered, shell = True)
-
+        '''
 
 
 
@@ -2066,13 +2242,10 @@ def psf_subtract_frame(struct):
         return 1
 
 
-def ret_filtername(filenumb, date):
+def ret_filtername(filenumb, date_targ = date):
         #input: file number
         #output: filter of file number
-        if filenumb > 999:
-                filename = directory + '/' + date + '/' + 's' + str(int(filenumb)) + '.fits'
-        else:
-                filename = directory + '/' + date + '/' + 's0' + str(int(filenumb)) + '.fits'
+        filename = directory + '/' + date_targ + '/' + 's' + str(int(filenumb)).zfill(4) + '.fits'
         img_hdr = pf.open(filename)[0].header
         filtername = img_hdr['filt1nam']
 	#print filtername
@@ -2962,12 +3135,15 @@ def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True)
                                         hdulist.writeto(filename_output, clobber=True)
                                         print 'created:', filename_output
 
-def pf_savefits(arr, filename):
+def pf_savefits(arr, filename, header = None):
 #Inputs are: array for saving to fit & filename for fits.
 #------
         hdu = pf.PrimaryHDU(arr)
         hdulist = pf.HDUList([hdu])
-        hdulist.writeto(filename, clobber=True)
+        if header:
+                hdulist.writeto(filename, clobber=True)
+        else:
+                hdulist.writeto(filename, clobber=True)
 
 def print_timenow():
         print datetime.datetime.now().strftime('%m-%d %H:%M:%S')
@@ -3777,20 +3953,22 @@ def fourier_shift(img, (y,x)):
         return img
 
 
-def test_get_flux_aperture(img, index, radi_ap):
-        #Inputs: image(2d array), indexes(2-element(y,x) array), radius of aperture(number)
-        #Returns: total flux in aperture
+def mask_aperture(img, index, radi_ap, const_mask):
+        #Inputs: 
+        # image(2d array), indexes(2-element(y,x) array), 
+        # radius of aperture(number), constant used to replace pixel values(number)
+        #Returns: 
+        # updated image with masked aperture(2d array)
         #------
 
-        #------
+
         #deciphering inputs
-        #------
         index_y = index[0]
         index_x = index[1]
         j = radi_ap
 
         #------
-        #Knowing index of peak, take aperture of j pixel around this point
+        #Knowing index of aperture center, take aperture of radius j pixel around this point
         #save total flux of aperture
         #------
         arr_totflux = []
@@ -3800,7 +3978,7 @@ def test_get_flux_aperture(img, index, radi_ap):
                                 if index_y + y_circ >= img.shape[0] or index_x + x_circ >= img.shape[1]:
                                         continue
                                 else:
-                                        img[index_y+y_circ, index_x+x_circ] += 1
+                                        img[index_y+y_circ, index_x+x_circ] = const_mask
 
         return img
 
