@@ -24,9 +24,9 @@ ds9_taurus = '/Users/gduchene/Applications/Ureka/bin/ds9 '
 #or different telescope
 #or changes to img files e.g. new stars added
 directory = 'ShaneAO'
-date = 'Mar16'
-arr_date_ShaneAO = ['Jun15', 'Nov15', 'Mar16', 'Sep16', 'Oct16']
-struct_ShaneAO_total_sets = {'Jun15':28, 'Nov15':25, 'Mar16':25, 'Sep16':19, 'Oct16':5}
+date = 'Jun15'
+arr_date_ShaneAO = ['Jun15', 'Nov15', 'Mar16', 'Sep16', 'Oct16', 'May17']
+struct_ShaneAO_total_sets = {'Jun15':28, 'Nov15':25, 'Mar16':25, 'Sep16':19, 'Oct16':5, 'May17':18}
 total_sets = struct_ShaneAO_total_sets[date]
 
 #Showing date when script is run
@@ -75,10 +75,11 @@ max_numb_imgs = 5000
 #run_create_reduced_imgs() to subtract imgs by sky img & divide imgs by flat
 #run_center_imgs()
 #run_create_filts() to perform high-pass filter
-#run_create_centroid_filts()
+#run_create_centroid_filts() to create stacked imgs after high-pass filter is applied
 #------------------
 #to be revised:
-#correlation_matrix2 to create parts ofcorrelation matrix
+#create_books_corr() to create some arrays for bookkeeping with correlation matrix
+#correlation_matrix2 to create parts of correlation matrix
 #merge_mat() to merge
 #------------------
 
@@ -163,16 +164,16 @@ def print_filters():
                         continue
 		hdr = fits[0].header
 
-		try:
+		if 'filt1nam' in hdr:
 			filtername = hdr['filt1nam']
-		except:
+                        if filtername not in arr_filternames:
+                                print filtername
+                                arr_filternames.append(filtername)
+		else:
                         print '------'
                         print "img numb", i, "does not have the tag 'FILT1NAM'"
 			print hdr.keys()
 			print 'number of header tags:', len(hdr.keys())
-		if filtername not in arr_filternames:
-			print filtername
-			arr_filternames.append(filtername)
         print 'filters are:', arr_filternames
 
 
@@ -180,11 +181,13 @@ def sort_filters():
         arr_ks_flat = []
         arr_brg_flat = []
         arr_j_flat = []
+        arr_h_flat = []
         arr_startend = open(directory + '/' + date + '/flat.txt', 'rb').read().splitlines()
         start = int(arr_startend[0])
         end = int(arr_startend[1])
         arr_flats = np.arange(start, end+1)
 	for i in arr_flats:
+                print '------'
 		print i
 
                 #------
@@ -207,12 +210,16 @@ def sort_filters():
 			arr_brg_flat.append(i)
 		if filtername[0] == 'J':
 			arr_j_flat.append(i)
+                if filtername[0] == 'H':
+                        arr_h_flat.append(i)
 	arr_ks_flat = np.array(arr_ks_flat)
-        print arr_ks_flat
+        print 'arr_ks_flat', arr_ks_flat
 	arr_brg_flat = np.array(arr_brg_flat)
-        print arr_brg_flat
+        print 'arr_brg_flat', arr_brg_flat
 	arr_j_flat = np.array(arr_j_flat)
-        print arr_j_flat
+        print 'arr_j_flat', arr_j_flat
+        arr_h_flat = np.array(arr_h_flat)
+        print 'arr_h_flat', arr_h_flat
         if arr_ks_flat.size:
                 pf_savefits(arr_ks_flat, directory + '/' + date + '/' + 'arr_ks_flat.fits')
                 pickle.dump(arr_ks_flat, open(directory + '/' + date + '/' + 'arr_ks_flat.p', 'wb'))
@@ -224,7 +231,11 @@ def sort_filters():
         if arr_j_flat.size:
                 pf_savefits(arr_j_flat, directory + '/' + date + '/' + 'arr_j_flat.fits')
                 pickle.dump(arr_j_flat, open(directory + '/' + date + '/' + 'arr_j_flat.p', 'wb'))
-                "saved j flats' img numbers"
+                print "saved j flats' img numbers"
+        if arr_h_flat.size:
+                pf_savefits(arr_h_flat, directory + '/' + date + '/' + 'arr_h_flat.fits')
+                pickle.dump(arr_h_flat, open(directory + '/' + date + '/' + 'arr_h_flat.p', 'wb'))
+                print "saved h flats' img numbers"
                 
 
 def create_sky(setnumb1):
@@ -311,6 +322,8 @@ def create_flats():
         filename_arrjflat_pickle = directory + '/' + date + '/' + "arr_h_flat.p"
         filename_arrjflat_fits = directory + '/' + date + '/' + "arr_j_flat.fits"
 
+        filename_arrhflat_fits = directory + '/' + date + '/' + "arr_h_flat.fits"
+
 
         arr_ks_flat = np.array([])
         if exists(filename_arrksflat_fits):
@@ -358,6 +371,21 @@ def create_flats():
                 except:
                         print 'error with img_flat_j'                
 
+        arr_h_flat = np.array([])
+        if exists(filename_arrhflat_fits):
+                arr_h_flat = pf.open(filename_arrhflat_fits)[0].data
+        elif exists(filename_arrhflat_pickle):
+                arr_h_flat = pickle.load(open(filename_arrhflat_pickle, "rb" ))
+        if arr_h_flat.size:
+                try:
+                        img_h_flat = norm_median_subdark(arr_h_flat)
+                        hdu = pf.PrimaryHDU(img_h_flat)
+                        hdulist = pf.HDUList([hdu])
+                        hdulist.writeto(directory + '/' + date + '/' + 'img_flat_h.fits',clobber=True)
+                        print 'img_flat_h.fits created'                
+                except:
+                        print 'error with img_flat_h'
+
 
 def run_create_filts():
         #Create high-pass filtered images for all recorded stars
@@ -385,12 +413,12 @@ def run_create_filts():
                                 filename_output  = directory + '/' + date_science  + '/s' + str(int(img_numb)).zfill(4) + '_RCF.fits'
 
                                 if exists(filename_output):
-                                        print filename_output, 'exists'
+                                        #print filename_output, 'exists'
                                         continue
                                 elif exists(filename_init):
                                         img_targ = pf.open(filename_init)[0].data
                                 else:
-                                        print img_numb, "doesn't exist"
+                                        print img_numb, "has yet to be reduced & centered"
                                         continue
                                         
                                 img_targ -= medfilt(img_targ, [len_filt_box, len_filt_box])
@@ -511,6 +539,242 @@ def create_stacked_mockinit():
                                                 arr_imgs.append(img)
                                 img_output = np.median(np.array(arr_imgs), axis = 0)
                                 pf_savefits(img_output, filename_mockinit_output)
+
+
+def histo_mock_shifts(): #error tag #hms# #CONTINUE here
+
+        radi_apert_com = 4
+        radi_apert_flux = 4
+        hdr_tag_com_y_guess = 'BINEST-Y' #define header tags for estimated y and x center of mass index
+        hdr_tag_com_x_guess = 'BINEST-X'
+        hdr_tag_com_y_bef = 'BINCOM-Y' #define header tags for y and x center of mass index
+        hdr_tag_com_x_bef = 'BINCOM-X'
+        round_precision = 6 #how many decimal places to round com to 
+
+
+        list_diff = []
+        cond_shape = False
+        arr_radiusmock = np.array([8, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75]).astype(int)
+        for date_targ in arr_date_ShaneAO:
+                for setnumb in np.arange(1, struct_ShaneAO_total_sets[date_targ]+1).astype(int):
+                        filename_diff_pre_final = directory + '/' + date_targ + '/' + 'arr_diff_pre_final_' + str(int(setnumb)) + '.fits'
+                        if exists(filename_diff_pre_final):
+                                arr_diff_temp = pf_loadfits(filename_diff_pre_final)
+                                #print 'arr shape:', arr_diff_temp.shape
+                                if cond_shape:
+                                        for row_diff_temp in arr_diff_temp:
+                                                if np.array_equal(shape_arrdiff, row_diff_temp.shape):
+                                                        if np.isnan(row_diff_temp).any():
+                                                                print 'we get nans'                                                                
+                                                                if np.array(row_diff_temp).size - sum(~np.isnan(row_diff_temp)) > 1: #hsm#
+                                                                        #print filename_diff_pre_final
+                                                                        #print row_diff_temp
+                                                                        continue
+                                                                else:
+                                                                        row_diff_temp = np.nan_to_num(row_diff_temp)
+                                                                        list_diff.append(row_diff_temp)
+                                                                        #print row_diff_temp
+                                                        else:
+                                                                list_diff.append(row_diff_temp)
+                                                else:
+                                                        print 'array shapes not the same'
+                                                        continue
+                                else:
+                                        shape_arrdiff = arr_diff_temp[0].shape
+                                        print shape_arrdiff
+                                        cond_shape = True
+
+        matrix_diff = np.array(list_diff)
+        print 'matrix_diff.shape', matrix_diff.shape
+        for index_rad in range(matrix_diff.shape[1]):
+                width_bin = 0.1
+                arr_hist_temp = matrix_diff[:, index_rad]
+                #loc_bin = np.arange(math.floor(np.amin(arr_hist_temp)*10)/10., np.amax(arr_hist_temp) + width_bin, width_bin)
+                dir_histo_mock = 'Histo_Mock'
+                filename_histo_temp = directory + '/' + dir_histo_mock + '/' + 'rad' + str(int(arr_radiusmock[index_rad])) + '.png'
+                if exists(filename_histo_temp):
+                        continue
+                plt.hist(arr_hist_temp)#, bins = loc_bin)
+                plt.xlabel('Shift in magnitude of 5sd (After LOCI)')
+                plt.title('5sd difference at radius = '+ str(int(arr_radiusmock[index_rad])))
+                plt.savefig(filename_histo_temp, bbox_inches='tight')
+                #plt.show()
+                plt.close()
+        
+        
+        #------
+        #open txt file with list of known binaries
+        #------
+        arr_bin = open(directory + '/' + directory + '_clearbinaries.txt', 'rb').read().splitlines()
+        arr_bin_dates = np.array(arr_bin[0::2])
+        arr_bin_setnumbs = np.array(arr_bin[1::2])
+        
+        for index_clearbin in range(arr_bin_dates.size):
+                date_clearbin = arr_bin_dates[index_clearbin]
+                setnumb_clearbin = arr_bin_setnumbs[index_clearbin]
+
+                filename_check = directory + '/' + date_clearbin + '/' + 'centroid_' +  str(int(setnumb_clearbin)) + '.fits'
+                filename_before = directory + '/' + date_clearbin + '/' + 'centroid_filt_' +  str(int(setnumb_clearbin)) + '.fits'
+                filename_after = directory + '/' + date_clearbin + '/' + 'set' + str(int(setnumb_clearbin)) + '_locifiltfinal.fits'
+                
+                if exists(filename_before) and exists(filename_check):
+                        filename_before = directory + '/' + date_clearbin + '/' + 'centroid_filt_' +  str(int(setnumb_clearbin)) + '.fits'
+                        #print filename_before
+
+                        #------
+                        # Check if center of mass index of binary has already been estimated manually
+                        # if yes, load estimated index from header
+                        # if no, get user to check if binary is visible in stacked raw img
+                        # if binary is visible, user should enter estimated binary's center of mass inde
+                        #------
+                        hdr_bef = pf.open(filename_before)[0].header
+                        if hdr_tag_com_y_guess in hdr_bef and hdr_tag_com_x_guess in hdr_bef:
+                                y_guess = hdr_bef[hdr_tag_com_y_guess]
+                                x_guess = hdr_bef[hdr_tag_com_x_guess]
+                                cond_com_guess = True
+                        else:
+                                cond_check = '' #raw_input('Type something then ENTER to view img. Press only ENTER to skip.')
+                                if cond_check:
+                                        open_fits(filename_check)
+                                #print 'If binary is seen, enter coordinates below. If not, press enter.'
+                                yx_guess_str = '' #raw_input('Enter y and x coordinates separated by comma:')
+                                if ',' in yx_guess_str:
+                                        yx_guess = yx_guess_str.split(',')
+                                        try:
+                                                y_guess, x_guess = np.array(yx_guess).astype(int)
+                                        except:
+                                                print 'error with extracting input coordinate'
+                                                continue
+                                        pf_edit_hdr(filename_before, hdr_tag_com_y_guess, y_guess)
+                                        pf_edit_hdr(filename_before, hdr_tag_com_x_guess, x_guess)
+                                        cond_com_guess = True
+                                else:
+                                        cond_com_guess = False
+                                        continue                                
+
+                        #------
+                        #if binary is visible before LOCI
+                        #------
+                        if cond_com_guess:
+                                print filename_before
+                                img_bef = pf_loadfits(filename_before) #img after high pass filter but before loci
+                                img_bef /= np.amax(img_bef)
+
+                                img_check = pf_loadfits(filename_check)
+                                img_check /= np.amax(img_check)
+
+                                #------
+                                # Check if binary's center of mass has already been computed
+                                # Check is done by searching header
+                                # If yes, load C.O.M. from header
+                                # If no, calculate using centroid around estimated values
+                                #------
+                                if hdr_tag_com_y_bef in hdr_bef and hdr_tag_com_x_bef in hdr_bef:
+                                        com_y_bef = hdr_bef[hdr_tag_com_y_bef]
+                                        com_x_bef = hdr_bef[hdr_tag_com_x_bef]
+                                else:
+                                        com_y_bef, com_x_bef = get_com_aperture(img_bef, np.array([y_guess, x_guess]), radi_apert_com)
+                                        #print 'computed y,x com:', com_y_bef, ',', com_x_bef
+                                        pf_edit_hdr(filename_before, hdr_tag_com_y_bef, round(com_y_bef, round_precision))
+                                        pf_edit_hdr(filename_before, hdr_tag_com_x_bef, round(com_x_bef, round_precision))
+
+                                #open_fits(filename_before)
+                                img_aft = pf_loadfits(filename_after) #img after high pass filter and loci
+                                com_y_aft, com_x_aft = get_com_aperture(img_aft, np.array([y_guess, x_guess]), radi_apert_com)
+                                index_center_bef = int((img_bef.shape[0]-1)/2), int((img_bef.shape[1]-1)/2)   
+                                index_center_aft = int((img_aft.shape[0]-1)/2), int((img_aft.shape[1]-1)/2)   
+                                sep_y_bef, sep_x_bef = com_y_bef - index_center_bef[0], com_x_bef - index_center_bef[1]
+                                sep_y_aft, sep_x_aft = com_y_aft - index_center_aft[0], com_x_aft - index_center_aft[1]
+
+                                r_bef = np.sqrt(sep_y_bef**2. + sep_x_bef**2.)
+                                angle_bef = np.arctan2(sep_y_bef, sep_x_bef)
+                                r_aft = np.sqrt(sep_y_aft**2. + sep_x_aft**2.)
+                                angle_aft = np.arctan2(sep_y_aft, sep_x_aft)
+
+                                print '------'
+                                print 'r_aft', r_aft
+
+                                r_change = r_aft - r_bef
+                                #print 'initial radius', r_bef, 'with change of', r_change
+
+                                flux_bef = ret_flux_com_aperture(img_check, np.array([y_guess, x_guess]), radi_apert_com, radi_apert_flux) ###
+                                flux_aft = ret_flux_com_aperture(img_aft, np.array([y_guess, x_guess]), radi_apert_com, radi_apert_flux)
+
+                                flux_filt_primary = ret_flux_aperture(img_bef, np.array((int((img_bef.shape[0]-1)/2), int((img_bef.shape[1]-1)/2))), radi_apert_flux)
+                                flux_primary = ret_flux_aperture(img_check, np.array((int((img_bef.shape[0]-1)/2), int((img_bef.shape[1]-1)/2))), radi_apert_flux)
+
+                                mag_bef = 2.5*np.log10(flux_primary/flux_bef)
+                                print 'mag_bef', mag_bef
+                                mag_aft_uncorrect = 2.5*np.log10(flux_filt_primary/flux_aft)
+                                print 'mag_aft_uncorrect', mag_aft_uncorrect
+
+                                #load all correction curves for date
+                                filename_arr_correction = 'arr_correction_' + date_clearbin + '.fits'
+                                arr_correction_date = pf_loadfits(filename_arr_correction)
+                                arr_correct_mdn = np.mean(arr_correction_date, axis = 0)
+                                print 'arr_correct_mdn', arr_correct_mdn
+
+                                #load radius array for mock ups
+                                filename_arrradiusmock = directory + '/' + date + '/' + 'arr_radiusmock.fits'
+                                arr_radiusmock = pf_loadfits(filename_arrradiusmock)
+
+                                #interpolate correction to add to flux_aft
+                                for index_radiusmock in np.arange(arr_radiusmock.size-1).astype(int):
+                                        radmock = arr_radiusmock[index_radiusmock]
+                                        radmock_next = arr_radiusmock[index_radiusmock+1]
+                                        if radmock < r_aft < radmock_next:
+                                                index_rad1 = index_radiusmock
+                                                index_rad2 = index_radiusmock+1
+                                                
+                                rad1 = arr_radiusmock[index_rad1]
+                                rad2 = arr_radiusmock[index_rad2]
+                                frac_r = (r_aft - rad1)/(rad2 - rad1)
+                                #print 'rad1', rad1
+                                #print 'rad2', rad2
+                                #print 'r_aft', r_aft
+
+                                mag1 = arr_correct_mdn[index_rad1]
+                                #print 'mag1', mag1
+                                mag2 = arr_correct_mdn[index_rad2]
+                                #print 'mag2', mag2
+                                mag_interpol =  mag1 + frac_r*(mag2 - mag1)
+                                #print 'mag interpolated', mag_interpol
+                                print 'mag_interpol', mag_interpol
+
+                                mag_aft_correct = mag_aft_uncorrect - mag_interpol
+                                mag_diff = mag_aft_correct - mag_bef
+                                print 'mag_diff', mag_diff
+
+                        else:
+                                continue
+                else:
+                        continue
+
+        '''
+        for index_clearbin in range(arr_bin_dates.size):
+                date_clearbin = arr_bin_dates[index_clearbin]
+                setnumb_clearbin = arr_bin_setnumbs[index_clearbin]
+
+                filename_check = directory + '/' + date_clearbin + '/' + 'centroid_' +  str(int(setnumb_clearbin)) + '.fits'
+                filename_before = directory + '/' + date_clearbin + '/' + 'centroid_filt_' +  str(int(setnumb_clearbin)) + '.fits'
+                filename_after = directory + '/' + date_clearbin + '/' + 'set' + str(int(setnumb_clearbin)) + '_locifiltfinal.fits'
+                
+                if exists(filename_before) and exists(filename_check):
+                        hdr_bef = pf.open(filename_before)[0].header
+                        if 'BINCOM-Y' in hdr_bef and 'BINCOM-X' in hdr_bef:
+                                img = pf_loadfits(filename_before)
+                
+                index_center = int((img.shape[0]-1)/2), int((img.shape[1]-1)/2)
+                img = mask_aperture(img, index_center, radi_apert_mask, const_mask) #mask center star, leaving only companion
+                index_maxpixval_1d = np.argmax(img) #index of max pixel value after masking
+                index_maxpixval_2d = np.unravel_index(index_maxpixval_1d, img.shape)
+                #print '------'
+                #print 'max pixel index(y,x:)', index_maxpixval_2d
+                com_y, com_x = get_com_aperture(img, index_maxpixval_2d, radi_apert_com)
+                #print 'binary companion index(y,x):', com_y, ',', com_x
+                index_center_y, index_center_x = index_center
+        '''
+
 
 
 def get_mock_shifts(bin_cond = True, faint_cond = True, replace_cond = True):
@@ -926,7 +1190,6 @@ def plot_histo_com():
                         r_shift_final = r_final - r_init
                         angle_shift_final = angle_final - angle_init
 
-
                         max_rad_shift_histo = 10
                         arr_r_filt = np.append(arr_r_filt, r_shift_filt[np.where(np.abs(r_shift_filt)<max_rad_shift_histo)])
                         arr_r_final = np.append(arr_r_final, r_shift_final[np.where(np.abs(r_shift_final)<max_rad_shift_histo)])
@@ -971,31 +1234,22 @@ def plot_histo_com():
                 plt.show()
                 '''
                 plt.close()
-                plt.hist(arr_r_final, bins = n_bins)
-                plt.xlabel('Shift in radius (After LOCI)')
-                plt.title('Radial shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
-                #plt.show()
-                plt.savefig("/home/jjoon/rad"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
+                if len(arr_r_final):
+                        plt.hist(arr_r_final, bins = n_bins)
+                        plt.xlabel('Shift in radius (After LOCI)')
+                        plt.title('Radial shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
+                        #plt.show()
+                        plt.savefig("/home/jjoon/rad"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
 
-                plt.close()
-                plt.hist(arr_angle_final, bins = n_bins)
-                plt.xlabel('Shift in angle (After LOCI)')
-                plt.title('Azimuth shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
-                plt.savefig("/home/jjoon/angle"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
-                #plt.show()
-                
-                #useless = raw_input('enter key to continue')
+                        plt.close()
+                        plt.hist(arr_angle_final, bins = n_bins)
+                        plt.xlabel('Shift in angle (After LOCI)')
+                        plt.title('Azimuth shift for mocks at radius = '+str(int(arr_radiusmock[index_rad])))
+                        plt.savefig("/home/jjoon/angle"+str(int(arr_radiusmock[index_rad]))+"sets.png", dpi = 200)
+                        #plt.show()
+                        
+                        #useless = raw_input('enter key to continue')
 
-def pf_loadfits(filename_img, print_cond = False):
-        if exists(filename_img):
-                try:
-                        return pf.open(filename_img)[0].data
-                except:
-                        return np.array([])
-        else:
-                if print_cond:
-                        print filename_img, 'doesnt exist'
-                return np.array([])
 
 def run_loci_date():
         for setnumb in np.arange(1, struct_ShaneAO_total_sets[date] +1 ).astype(int):
@@ -1053,7 +1307,7 @@ def run_loci_mockbins(setnumb1, input_radiusmock = [0], bin_cond = True, faint_c
                 if input_radiusmock[0]:
                         arr_radiusmock = np.array(input_radiusmock)
                 else:
-                        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+                        arr_radiusmock = np.array([8, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75]).astype(int)
                 print 'arr_radiusmock:', arr_radiusmock
                 if faint_cond:
                         arr_theta = np.array([0]) #faint***
@@ -1349,9 +1603,10 @@ def cleanup_flat():
         #### ___Change the next few lines as necessary!!!___
 	threshold_min = 0.7
 	threshold_max = 1.3
-	array_flatname = ['img_flat_']#*3
+	array_flatname = ['img_flat_']*2
 
         array_flatname[0] += 'ks'
+        array_flatname[1] += 'h'
 	#array_flatname[1] += 'j'
         #array_flatname[2] += 'brg'
         
@@ -1808,8 +2063,10 @@ def print_calbin(): #TEMP#
                                                         img_hdr = pf.open(filename_imgnumb1)[0].header
                                                         #for key in img_hdr:
                                                         #        print key
-                                                        time_obs = img_hdr['TIME-OBS']
-                                                        print time_obs
+                                                        print img_hdr['DATE-BEG'][:10]
+                                                        #print time_obs
+                                                        #print img_hdr.keys()
+                                                        
                                                         #useless = raw_input('enter key to continue')
                                                 counter_star += 1
                                         except:
@@ -1818,12 +2075,14 @@ def print_calbin(): #TEMP#
                                                 print '------'
 
 
-def ret_separation_calbins(): #error tag: #rsc# #CONTINUE
+
+
+def ret_separation_calbins(): #error tag: #rsc#
         # Prints separation in y,x and radius,separation angle
         # Do so for all calibration binaries
 
         radi_apert = 6
-        radi_apert_mask = 5
+        radi_apert_mask = 15
         const_mask = 0
 
         counter_calbin = 1
@@ -1875,11 +2134,12 @@ def ret_separation_calbins(): #error tag: #rsc# #CONTINUE
                         else:
                                 cond_calbin_posnumb = False
                                 counter_calbin += 1
+                #print np.mean(arr_x_sep_avg)
                 print np.mean(arr_angle_sep_avg)*360./(2*math.pi) #rsc# #TEMP# Change depending on wanted output
                 filename_pos1 = filename_centered_calbin = directory + '/' + 'Calibration_Binaries' + '/' + 'calbin_' + str(counter_calbin) + '_RCpos1' + '.fits'
                 if not exists(filename_pos1):
                         print filename_pos1, 'doesnt exist' 
-                        cond_calbin_numb = False 
+                        cond_calbin_numb = False
 
 
 def process_calbins(): #error tag: #pcl#
@@ -2697,6 +2957,7 @@ def compare_plots():
         plt.gca().invert_yaxis()
         plt.show()
 
+
 def ret_filtername_set(setnumb1, date = date):
         #------
         #Ask for user input regarding which set to take as target psf
@@ -3083,13 +3344,13 @@ def loci_gen(img1, radius_sub, radius_op, arr_img2, filename_output):
 	return 1
 
 
-
-
 def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True): #error tag: #rcflm#
-        #startset = 12 #faint*** #rcflm#
+        #create stacked loci mock up binary imgs
+        #------
+
         startset = 1
         arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
-        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        arr_radiusmock = np.array([8, 75]).astype(int)#np.array([8, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75]).astype(int) 
         print 'arr_radiusmock', arr_radiusmock
         arr_theta = np.arange(0, 360, 60).astype(int)
         print 'arr_theta', arr_theta
@@ -3112,42 +3373,28 @@ def run_create_final_loci_mockbins(total_sets = total_sets, highpassfilt = True)
                                 else:
                                         filename_output = directory + '/' + date + '/' + 'set'+ str(int(setnumb1)) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
 
-
                                 for i in arr_targpsf:
                                         if highpassfilt:
                                                 filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfiltfinal.fits' #faint***
                                         else:
                                                 filename_input = directory + '/' + date + '/' + str(i) + '_mockrad' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + 'locimockfinal.fits'
-                                        try:
-                                                with pf.open(filename_input) as f_temp:
-                                                        img = f_temp[0].data
-                                        except:
-                                                print filename_input, 'doesnt exist', 'from set:', setnumb1
+                                        if exists(filename_input):
+                                                try:
+                                                        with pf.open(filename_input) as f_temp:
+                                                                img = f_temp[0].data
+                                                except:
+                                                        print 'error OPENING img file, but it exists:', filename_input
+                                                        continue
+                                        else:
+                                                #print filename_input, 'doesnt exist', 'from set:', setnumb1
                                                 continue
                                         arr_for_mdn.append(img)
                                 print 'images for mdn:',len(arr_for_mdn)
 
-                                if len(arr_for_mdn) > 1:
+                                if len(arr_for_mdn) > 5:
                                         img_final = np.median(np.array(arr_for_mdn), axis = 0)
-
-                                        hdu = pf.PrimaryHDU(img_final)
-                                        hdulist = pf.HDUList([hdu])
-                                        hdulist.writeto(filename_output, clobber=True)
+                                        pf_savefits(img_final, filename_output)
                                         print 'created:', filename_output
-
-def pf_savefits(arr, filename, header = None):
-#Inputs are: array for saving to fit & filename for fits.
-#------
-        hdu = pf.PrimaryHDU(arr)
-        hdulist = pf.HDUList([hdu])
-        if header:
-                hdulist.writeto(filename, clobber=True)
-        else:
-                hdulist.writeto(filename, clobber=True)
-
-def print_timenow():
-        print datetime.datetime.now().strftime('%m-%d %H:%M:%S')
-
 
 def plot_detlim_final(filt = True):
         #Plot final detection limits for ALL stars.
@@ -3266,8 +3513,8 @@ def plot_detlim_final(filt = True):
                         y_index_center_avg = int((y_length_avg - 1)/2)
                         x_index_center_avg = int((x_length_avg - 1)/2)
 
-                        flux_main_filt = get_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
-                        flux_main_unfilt = get_flux_aperture(img_avg_unfilt, [y_index_center_avg, x_index_center_avg], radi_apert)
+                        flux_main_filt = ret_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
+                        flux_main_unfilt = ret_flux_aperture(img_avg_unfilt, [y_index_center_avg, x_index_center_avg], radi_apert)
 
 
                         #------
@@ -3282,7 +3529,7 @@ def plot_detlim_final(filt = True):
                                 for elem in arr_index_pre:
                                         y_apert_center_pre = elem[0] + y_index_center_avg
                                         x_apert_center_pre = elem[1] + x_index_center_avg
-                                        array_flux_apert_radi_pre = get_flux_aperture(img_avg_unfilt, [y_apert_center_pre, x_apert_center_pre], radi_apert)
+                                        array_flux_apert_radi_pre = ret_flux_aperture(img_avg_unfilt, [y_apert_center_pre, x_apert_center_pre], radi_apert)
                                         arr_5sd_radi_pre.append(array_flux_apert_radi_pre)                        
                                 sd_ring_pre = np.std(np.array(arr_5sd_radi_pre))
                                 arr_5sd_pre.append(sd_ring_pre*5)
@@ -3304,7 +3551,7 @@ def plot_detlim_final(filt = True):
                                 for elem in arr_index_pre_filt:
                                         y_apert_center_pre_filt = elem[0] + y_index_center_avg
                                         x_apert_center_pre_filt = elem[1] + x_index_center_avg
-                                        array_flux_apert_radi_pre_filt = get_flux_aperture(img_avg, [y_apert_center_pre_filt, x_apert_center_pre_filt], radi_apert)
+                                        array_flux_apert_radi_pre_filt = ret_flux_aperture(img_avg, [y_apert_center_pre_filt, x_apert_center_pre_filt], radi_apert)
                                         arr_5sd_radi_pre_filt.append(array_flux_apert_radi_pre_filt)                        
                                 sd_ring_pre_filt = np.std(np.array(arr_5sd_radi_pre_filt))
                                 arr_5sd_pre_filt.append(sd_ring_pre_filt*5)
@@ -3328,9 +3575,9 @@ def plot_detlim_final(filt = True):
                                         y_apert_center = elem[0] + y_index_center_avg
                                         x_apert_center = elem[1] + x_index_center_avg
                                         if filt:
-                                                array_flux_apert_radi = get_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
+                                                array_flux_apert_radi = ret_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
                                         else:
-                                                array_flux_apert_radi = get_flux_aperture(img_subed, [y_apert_center, x_apert_center], radi_apert)
+                                                array_flux_apert_radi = ret_flux_aperture(img_subed, [y_apert_center, x_apert_center], radi_apert)
                                         arr_flux_radi.append(array_flux_apert_radi)
                                 #print 'arr_flux_radi', arr_flux_radi
                                 sd_ring_r = np.std(np.array(arr_flux_radi))
@@ -3489,25 +3736,52 @@ def plot_correction(date = date):
         '''
 
 
+def ret_flux_com_aperture(img, index, radi_com, radi_ap):
+        #------
+        # Return flux in aperture around center of mass
+        #Inputs:
+        # 2d img array, 2d index, 
+        # radius of center of mass aperture(int), radius of aperture for flux calculation(int)
+        #Output:
+        # total flux in aperture
+        #------
+        index_com = get_com_aperture(img, index, radi_com)
+        com_y, com_x = index_com
+        dec_com_x = com_x%1
+        dec_com_y = com_y%1
+        int_com_x = int(com_x)
+        int_com_y = int(com_y)
+        img = fourier_shift(img, [-dec_com_y, -dec_com_x])
+        flux_ap = ret_flux_aperture(img, [int_com_y, int_com_x], radi_ap, ret_array=False)
+        return flux_ap
 
-def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
-        #if filt: #pdl
-        #        total_sets = 12
-        startset = 13 #pdl
+
+def plot_detlim_loci(filt = True): #error tag: #pdl#
+        startset = 1 #pdl#
 
         #------
-        #Define radius of aperture
+        #Define radius of apertures
+        #For center of mass calculations and flux measurements
         #------
-        radi_apert = 3
-        startset = 1
-        arr_setnumbs = np.arange(startset, total_sets+1).astype(int)
+        radi_apert = 4
+        radi_com = 4
+        
+
+        struct_setnumbs = {}
+        struct_setnumbs['Jun15'] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 19, 20, 21, 25, 26]
+        struct_setnumbs['Nov15'] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19]
+        struct_setnumbs['Mar16'] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        struct_setnumbs['Sep16'] = range(1, 19+1)
+        struct_setnumbs['Oct16'] = range(1, 5+1)
+        struct_setnumbs['May17'] = range(1, 18+1)
+        arr_setnumbs = struct_setnumbs[date] #change if we only want to generate plots for certain sets
         
 
         #------
         # define mock binary radii
         # save to fits file
         #------
-        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        arr_radiusmock = np.array([8, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75]).astype(int)
         filename_arrradiusmock = directory + '/' + date + '/' + 'arr_radiusmock.fits'
         pf_savefits(arr_radiusmock, filename_arrradiusmock)
         print 'arr_radiusmock', arr_radiusmock
@@ -3558,7 +3832,6 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 else:
                         filename_plot = directory + '/' + date + '/' + 'set' + str(int(setnumb1)) + '_plot.png'
                 
-
                 #------
                 # Open pre-subtraction, medianed img for set number
                 # Obtain flux of aperture around primary
@@ -3574,7 +3847,8 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 y_length_avg, x_length_avg = img_avg.shape
                 y_index_center_avg = int((y_length_avg - 1)/2)
                 x_index_center_avg = int((x_length_avg - 1)/2)
-                flux_main = get_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
+                flux_main = ret_flux_aperture(img_avg, [y_index_center_avg, x_index_center_avg], radi_apert)
+
                 print 'flux_main', flux_main
 
 
@@ -3589,7 +3863,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 y_length_avg_unfilt, x_length_avg_unfilt = img_avg_unfilt.shape
                 y_index_center_avg_unfilt = int((y_length_avg_unfilt - 1)/2)
                 x_index_center_avg_unfilt = int((x_length_avg_unfilt - 1)/2)
-                flux_main_unfilt = get_flux_aperture(img_avg_unfilt, [y_index_center_avg_unfilt, x_index_center_avg_unfilt], radi_apert)
+                flux_main_unfilt = ret_flux_aperture(img_avg_unfilt, [y_index_center_avg_unfilt, x_index_center_avg_unfilt], radi_apert)
 
 
                 #------
@@ -3603,7 +3877,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                         for elem in arr_index_pre:
                                 y_apert_center_pre = elem[0] + y_index_center_avg
                                 x_apert_center_pre = elem[1] + x_index_center_avg
-                                array_flux_apert_radi_pre = get_flux_aperture(img_avg, [y_apert_center_pre, x_apert_center_pre], radi_apert)
+                                array_flux_apert_radi_pre = ret_flux_aperture(img_avg, [y_apert_center_pre, x_apert_center_pre], radi_apert)
                                 arr_5sd_radi_pre.append(array_flux_apert_radi_pre)
                         
                         sd_ring_pre = np.std(np.array(arr_5sd_radi_pre))
@@ -3615,14 +3889,14 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 # Run get_flux_aperture to find number of pixels in aperture
                 #------
                 img_zeros = np.zeros(img_subed_filt.shape)
-                arr_empty_apert = get_flux_aperture(img_zeros, [y_index_center_avg, x_index_center_avg], radi_apert, True)
+                arr_empty_apert = ret_flux_aperture(img_zeros, [y_index_center_avg, x_index_center_avg], radi_apert, True)
                 num_pix_apert = len(arr_empty_apert)
 
 
                 #------
-                #Iterate through radii for mock binaries
-                #Check medianed, LOCI-subtracted img(without binary) for 5 sigma value at that radius
-                #Create array of corresponding flux ratio
+                # Iterate through radii for mock binaries
+                # Check medianed, LOCI-subtracted img(without binary) for 5 sigma value at that radius
+                # Create array of corresponding flux ratio
                 #------
                 arr_5sd = []
                 arr_sd = []
@@ -3633,7 +3907,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                         for elem in arr_index:
                                 y_apert_center = elem[0] + y_index_center_avg
                                 x_apert_center = elem[1] + x_index_center_avg
-                                array_flux_apert_radi = get_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
+                                array_flux_apert_radi = ret_flux_aperture(img_subed_filt, [y_apert_center, x_apert_center], radi_apert)
                                 arr_flux_radi.append(array_flux_apert_radi)
                         #print 'arr_flux_radi', arr_flux_radi
                         sd_ring_r = np.std(np.array(arr_flux_radi))
@@ -3647,7 +3921,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                         img_mock = pf.open(directory + '/' + 'Jun15' + '/' + 'centroid_1.fits')[0].data
                         img_mock /= np.amax(img_mock)
                         img_mock *= float(mock_factor)
-                        flux_bin_init = get_flux_aperture(img_mock, [y_index_center_avg, x_index_center_avg], radi_apert)
+                        flux_bin_init = ret_flux_com_aperture(img_mock, [y_index_center_avg, x_index_center_avg], radi_com, radi_apert)
                         arr_flux_bin_init.append(flux_bin_init)
                         
                 arr_flux_bin_init = np.array(arr_flux_bin_init)
@@ -3659,6 +3933,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 counter = 0
                 arr_avg_fluxbin = []
                 arr_sd = []
+                arr_mag_alltheta_final_trans = []
                 for radius_mock in arr_radiusmock: #iterate through different radii from center
                         arr_delflux = []
                         arr_fluxbin_r = []
@@ -3684,7 +3959,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                                                 subprocess.call('rm -rf ' + filename_final, shell = True)
                                                 continue
                                 else:
-                                        print 'File not found:', filename_final
+                                        #print 'File not found:', filename_final
                                         continue
 
                                 #------
@@ -3702,28 +3977,51 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
 
                                 y_index_bin = y_index_center + dy_mock
                                 x_index_bin = x_index_center + dx_mock
-                                flux_bin = get_flux_aperture(img_final, [y_index_bin, x_index_bin], radi_apert)
+                                flux_bin = ret_flux_com_aperture(img_final, [y_index_bin, x_index_bin], radi_com, radi_apert)
                                 arr_fluxbin_r.append(flux_bin)
-                        
+                                #arr_fluxbin_r is flux after
+
+                        arr_mag_alltheta_final_trans.append(2.5*np.log10(flux_main/np.array(arr_fluxbin_r))) #CONTINUE
                         arr_avg_fluxbin.append(np.mean(arr_fluxbin_r))
                         arr_fluxbin_r = flux_main/arr_fluxbin_r
                         sd_r = np.std(arr_fluxbin_r)
                         arr_sd.append(sd_r)
 
-                print 'arr_sd', arr_sd
+
+                #print 'arr_sd', arr_sd
                 arr_mag_sd = 2.5*np.log10(np.sqrt( (np.array(arr_sd)**2.) + (np.array(arr_5sd_err)**2.) ))
-                print 'arr_5sd_err', arr_5sd_err
+                #print 'arr_5sd_err', arr_5sd_err
                 arr_mag_final_err = 2.5*np.log10(np.sqrt( (np.array(arr_sd)**-2.) + (np.array(arr_5sd_err)**2.) )) # exponent for arr_sd is -2, since we need to invert flux ratio
 
                 arr_fluxratio_final = flux_main/arr_avg_fluxbin
                 arr_mag_init = 2.5*np.log10(arr_fluxratio_init)
-                arr_mag_final = 2.5*np.log10(arr_fluxratio_final) 
+                arr_mag_final = 2.5*np.log10(arr_fluxratio_final)
                 arr_mag_diff = arr_mag_final - arr_mag_init #correction curve, diff btwn binary flux before injection and after loci
-                print 'arr_mag_final_err', arr_mag_final_err
-                print 'arr_mag_diff', arr_mag_diff
-                print 'arr_mag_sd', arr_sd
-                print '-------'
+                #print 'arr_mag_final_err', arr_mag_final_err
+                #print 'arr_mag_diff', arr_mag_diff
+                #print 'arr_mag_sd', arr_sd
+                #print '-------'
                 
+                arr_mag_alltheta_final = np.transpose(np.array(arr_mag_alltheta_final_trans))
+                print 'arr_mag_alltheta_final.shape', arr_mag_alltheta_final.shape
+
+                arr_mag_diff_pre_final = []
+                if counter > 50:
+                        for index_row in range(len(arr_mag_alltheta_final)):
+                                arr_mag_theta_temp = arr_mag_alltheta_final[index_row]
+                                arr_mag_diff_pre_final_temp = (arr_mag_5sd - (arr_mag_theta_temp - arr_mag_init)) - arr_mag_5sd_pre
+                                arr_mag_diff_pre_final.append(arr_mag_diff_pre_final_temp)
+                        filename_diff_pre_final = directory + '/' + date + '/' + 'arr_diff_pre_final_' + str(int(setnumb1)) + '.fits'
+                        arr_mag_diff_pre_final = np.array(arr_mag_diff_pre_final)
+                        print 'arr_mag_diff_pre_final', arr_mag_diff_pre_final
+                        print 'arr_mag_diff_pre_final.shape', arr_mag_diff_pre_final.shape
+                        pf_savefits(arr_mag_diff_pre_final, filename_diff_pre_final)
+                        print '------'
+                        print 'Created:', filename_diff_pre_final
+                        print filename_diff_pre_final
+                        print '------'
+                
+                #Do not delete
                 #------
                 # Plot curves
                 #------
@@ -3739,8 +4037,7 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                 plt.gca().invert_yaxis()
                 plt.legend([mag_pre, mag_init, mag_afterloci, mag_5sd, mag_5sd_correct], ['5 s.d. before subtraction', 'Mag. of mock binary before injection', 'Mag. of binary after LOCI', '5 s.d. before correction', '5 s.d. after correction'])
                
-                #plt.show() ####
-                #plt.savefig('/home/jjoon/meeting_4Apr/' + 'set' + str(int(setnumb1)) + 'plotfilt.png')
+                plt.show() # #pdl#
                 #plt.close()
                 #------
                 # Append corrected 5sd plots to rows in a table. Save as fits file.
@@ -3749,30 +4046,36 @@ def plot_detlim_loci(filt = True, total_sets = total_sets): #error tag: #pdl
                         arr_5sd_correct.append(arr_mag_5sd - arr_mag_diff)
                         arr_correction_save = np.append(arr_correction_save, np.array([arr_mag_diff]), axis = 0)
                         #arr_correction_err_save = np.append(arr_correction_err_save, np.array([arr_mag_sd]), axis = 0)
+                pf_savefits(np.array(arr_correction_save), filename_arr_correction)
                 print 'number of images used:', counter
+                print 'created:', filename_arr_correction
+
                 mng = plt.get_current_fig_manager()                                         
                 mng.resize(*mng.window.maxsize())
-                plt.savefig(filename_plot)#, bbox_inches='tight')
-                #plt.show()
-                print 'saved plot as img:', filename_plot
-                plt.close()
+                if exists(filename_plot):
+                        subprocess.call('rm -rf ' + filename_plot, shell = True)  #delete graph if exists
+                if not np.isnan(arr_mag_5sd - arr_mag_diff).any():
+                        plt.savefig(filename_plot)#, bbox_inches='tight')
+                        print 'saved plot as img:', filename_plot
+                        #plt.show()
                 
 
-                hdu = pf.PrimaryHDU(np.array(arr_correction_save))
-                hdulist = pf.HDUList([hdu])
-                hdulist.writeto(filename_arr_correction, clobber=True)
-                print 'created:', filename_arr_correction
+                plt.close()
+                
+                
 
                 hdu = pf.PrimaryHDU(np.array(arr_correction_err_save))
                 hdulist = pf.HDUList([hdu])
                 hdulist.writeto(filename_arr_correction_err, clobber=True)
                 print 'created:', filename_arr_correction_err
+                #'''
 
+        ''' #Do not delete
         hdu = pf.PrimaryHDU(np.array(arr_5sd_correct))
         hdulist = pf.HDUList([hdu])
         hdulist.writeto(filename_arr5sdcorrectfits, clobber=True)
         print 'created:', filename_arr5sdcorrectfits        
-
+        '''
 
 def test_apertures_ring(): ###TEMP#
 #for radius from center of img, highlight apertures for obtaining 5sigma values
@@ -3786,7 +4089,7 @@ def test_apertures_ring(): ###TEMP#
                 for elem in arr_index:
                         y = elem[0] + y_index_center_avg
                         x = elem[1] + x_index_center_avg
-                        img_test = test_get_flux_aperture(img_test, [y,x], radi_apert)
+                        img_test = test_ret_flux_aperture(img_test, [y,x], radi_apert)
                 hdu = pf.PrimaryHDU(img_test)
                 hdulist = pf.HDUList([hdu])
                 hdulist.writeto('test.fits', clobber=True)
@@ -3867,7 +4170,7 @@ def get_indexap_annulus(radi_annulus, radi_apert):
         return arr_index
 
 
-def get_flux_aperture(img, index, radi_ap, ret_array=False):
+def ret_flux_aperture(img, index, radi_ap, ret_array=False):
         #Inputs: image(2d array), indexes(2-element(y,x) array), radius of aperture(number)
         #Returns: total flux in aperture
         #------
@@ -3887,7 +4190,7 @@ def get_flux_aperture(img, index, radi_ap, ret_array=False):
         for x_circ in np.arange((2*j) + 1) - j:
                 for y_circ in np.arange((2*j) + 1) - j:
                         if distance(x_circ, 0, y_circ, 0) < (j+0.5):
-                                if index_y + y_circ >= img.shape[0] or index_x + x_circ >= img.shape[1]:
+                                if index_y + y_circ >= img.shape[0] or index_y + y_circ < 0  or index_x + x_circ >= img.shape[1] or index_x + x_circ < 0:
                                         continue
                                 else:
                                         arr_totflux.append(img[index_y+y_circ, index_x+x_circ])
@@ -3982,182 +4285,49 @@ def mask_aperture(img, index, radi_ap, const_mask):
 
         return img
 
-def outdated_RunKlip(total_sets = total_sets):
-        
-        #max_area_klip = 300
-        max_rad_img = 80
-        rad_annulus = 5
-        fwhm_threshold = 10
-	maxpix_threshold = 35000
-	minpix_threshold = 5000
-        #numb_klip_modes = 200
-        arr_klipmodes = np.arange(5, 50, 5)
-        
+def pf_loadfits(filename_img, print_cond = False):
+        #Inputs:
+        # path to img file(str), print_cond set to True if you want to be informed if file doesn't exist(bool)
+        #Output:
+        # array stored within fits file
+        #------
 
-        print 'total_sets', total_sets
-        print 'arr_date_ShaneAO', arr_date_ShaneAO
-        print 'date of target psf', date
-        index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
-        print 'index_date_targ', index_date_targ
-        
-        #--------------------------------------------------------------
-        #Ask for user input regarding which set to take as target psf
-        #Reads txt file in directory to know which files to use
-        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
-        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
-        start1 = int(arr_startend1[0])
-        end1 = int(arr_startend1[1])
-        arr_targpsf = np.arange(start1, end1+1)
-        #-------------------------------------------------------------
-        
-	filter_of_set = ret_filtername(start1, date) #check for filter of 1st img in set
-
-        arr_substar = []
-        arr_setnumb = []
-        print 'setnumb1', int(setnumb1)
-        for index_date in np.arange(len(arr_date_ShaneAO)):
-                date_ref = arr_date_ShaneAO[index_date]
-                total_sets = struct_ShaneAO_total_sets[date_ref]
-                print 'total_sets', total_sets
-                arr_substar_temp = np.array([]) #array for adding ref psf filenames
-                arr_setnumb_temp = np.array([]) #array for adding ref psf set numbers
-                for setnumb2 in np.arange(1,total_sets+1):
-                        if setnumb2 == int(setnumb1) and index_date_targ == index_date:
-                                print 'index_date_targ', index_date_targ, 'i.e.', date_ref, 'set', setnumb2, 'skipped'
-                                continue
-                        else:
-                                print 'adding elements in set no.', setnumb2, 'for date', date_ref
-                                arr_startend2 = open(directory + '/' + date_ref + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
-                                start2 = int(arr_startend2[0])
-                                end2 = int(arr_startend2[1])
-                                arr_imgnumbs = np.arange(start2, end2+1)
-                                arr_substar_temp = np.append(arr_substar_temp,  arr_imgnumbs) #array of filenames for ref psf
-                                arr_temp = np.zeros(arr_imgnumbs.size)
-                                arr_temp.fill(setnumb2)
-                                arr_setnumb_temp = np.append(arr_setnumb_temp, arr_temp) #set numbers for ref psfs
-                arr_substar_temp = arr_substar_temp.astype(int)
-                print 'arr_setnumb_temp', arr_setnumb_temp
-                arr_setnumb_temp = arr_setnumb_temp.astype(int)
-                arr_substar.append(arr_substar_temp)
-                arr_setnumb.append(arr_setnumb_temp)
-
-        print 'arr_setnumb', arr_setnumb
-        print 'arr_substar', arr_substar
-        #define subtraction ratios to be iterated through
-        arr_subratio = (np.arange(20)+90)/100.		
-
-        #define empty arrays, for psf-subtracted imgs for avging
-        arr_img = []
-        arr_mdn = np.array([])
-        arr_5sd = np.array([])
-
-	print 'arr_targpsf', arr_targpsf
-        arr_j = []
-        arr_img2 = []
-
-        for index_date in np.arange(len(arr_date_ShaneAO)):
-                date_ref = arr_date_ShaneAO[index_date]
-                #arr_j_temp = []
-                #arr_img2_temp = []
-                arr_substar_temp = arr_substar[index_date]
-                print 'arr_substar_temp', arr_substar_temp
-                for j in arr_substar_temp: #loop through ref imgs
-                        #print 'compiling img', j, 'for subtraction'
-                        arr_output = []
-                        arr_rss = np.array([])
-                        j_index = np.argwhere(arr_substar_temp == j)
-                        j_index = j_index[0]
-                        j_index = j_index[0]
-                        if j > 999:
-                                filename =  directory + '/' + date_ref  + '/s' + str(int(j)) + '_reduced_centered.fits'
-                                if exists(filename):
-                                        img2 = pf.open(filename)[0].data
-                                        maxpixval = np.amax(img2)
-                                        img2 /= maxpixval
-                                else:
-                                        print filename, 'doesnt exist'
-                                        continue
-                        else:
-                                filename =  directory + '/' + date_ref  + '/s0' + str(int(j)) + '_reduced_centered.fits'
-                                if exists(filename):
-                                        img2 = pf.open(filename)[0].data
-                                        maxpixval = np.amax(img2)
-                                        img2 /= maxpixval
-                                else:
-                                        print filename, 'doesnt exist'
-                                        continue
-
-                        img_filter = ret_filtername(j, date_ref)
-                        
-                        if img_filter != filter_of_set: #removing frames of different filter
-                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
-                                #print 'img filter: ', img_filter, 'different from set filter:', filter_of_set
-                                continue
-                        elif maxpixval > maxpix_threshold or maxpixval < minpix_threshold: #removing frames with max pix values not within threshold
-                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
-                                #print 'max pixel value of', maxpixval, 'not within allowed region'
-                                continue
-
-                        fwhm = get_fwhm(img2)
-                        if not fwhm: #remove frames that gaussian func couldn't fit
-                                #print 'eliminating', j, 'from subtraction', 'from date', date_ref
-                                continue 
-                        elif fwhm > fwhm_threshold: #remove frames with large fwhm
-                                print 'eliminating', j, 'from subtraction', 'from date', date_ref
-                                #print 'FWHM greater than', fwhm_threshold
-                                continue
-                        
-                        arr_j.append(int(j))
-
-                        img2 = img2.flatten() #change to 1D array
-                        
-                        if img2.size != 25921:
-                                print 'img2 shape isnt looking right'
-                                print 'img2.shape', img2.shape
-                                print j, date_ref
-                        arr_img2.append(img2)
-                        
-        arr_img2 = np.array(arr_img2)
-        print 'arr_img2.shape', arr_img2.shape
-
-        for index_row in np.arange(len(arr_img2)):
-                img2 = arr_img2[index_row]
-                arr_img2[index_row] -=  np.mean(img2)
-
-        arr_pool_vars = []
-        for filenumb_img1 in arr_targpsf:
-                for numb_klip_modes in arr_klipmodes:
-                        struct = {'filenumb_img1': filenumb_img1, 'arr_img2': arr_img2, 'date_ref': date_ref, 'numb_klip_modes':numb_klip_modes, 'max_rad_img': max_rad_img, 'rad_annulus': rad_annulus}
-                        arr_pool_vars.append(struct)
-
-        print  '------------------------' 
-        print 'Number of loops to run:', len(arr_pool_vars)
-        print '------------------------'
-        
-        
-        filename_arrpoolvars = 'klip_arr_pool_vars_' + date + 'set' + str(int(index_date_targ)) + '.p'
-        pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb'))
-        
-        #arr_pool_vars = pickle.load(open(filename_arrpoolvars, 'rb'))        
-
-        #print  '------------------------' 
-        #print 'Number of loops to run:', len(arr_pool_vars)
-        #print '------------------------'
-        
-        '''
-        for elem in arr_pool_vars:
-                klip(elem)
-        '''        
-        	
-	threadnumb = 6
-	thepool = ThreadPool(threadnumb)
-        arr_imgfinals = thepool.map(klip, arr_pool_vars)
-        thepool.close()
-        thepool.join()
+        if exists(filename_img):
+                try:
+                        return pf.open(filename_img)[0].data
+                except:
+                        return np.array([])
+        else:
+                if print_cond:
+                        print filename_img, 'doesnt exist'
+                return np.array([])
 
 
+def pf_savefits(arr, filename):
+        #Inputs are: array for saving to fit & filename for fits.
+        #------
 
-        
+        hdu = pf.PrimaryHDU(arr)
+        hdulist = pf.HDUList([hdu])
+        hdulist.writeto(filename, clobber=True)
+
+
+def pf_edit_hdr(filename, hdr_tag, hdr_elem):
+        #Edits header of fits file. Can be used to replace or add tag
+        #Inputs:
+        # filename of fits file(str), tag of header element(str), info to add as header element
+        #------
+
+        file_fits = pf.open(filename, mode = 'update')
+        img_hdr = file_fits[0].header
+        img_hdr[hdr_tag] = hdr_elem
+        file_fits.flush()
+        file_fits.close()
+
+def print_timenow():
+        print datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+
+
 
 def run_theklip():
         #-------
@@ -4172,9 +4342,6 @@ def run_theklip():
 	minpix_threshold = 5000 # exclude imgs with pixel values below this number
         arr_klipmodes = np.array([15, 25, 35]).astype(int) # array with number of klip modes to try
 
-
-        
-
         #------
         #arr_date_ShaneAO: array of date names in telescope directory
         #index_date_targ: index of date in arr_date_ShaneAO
@@ -4184,8 +4351,6 @@ def run_theklip():
         index_date_targ = arr_date_ShaneAO.index(date) #index of date of target psf
         print 'index_date_targ', index_date_targ
 
-
-        
         #------
         # Ask for user input regarding which set to take as target psf
         # Reads txt file in directory to know which files to use
@@ -4196,8 +4361,6 @@ def run_theklip():
         end1 = int(arr_startend1[1])
         arr_targpsf = np.arange(start1, end1+1)
         print 'arr_targpsf', arr_targpsf
-
-
         
         #------
         #open txt file with list of known binaries
@@ -4254,8 +4417,6 @@ def run_theklip():
                 arr_substar_temp = arr_substar_temp.astype(int)
                 arr_substar.append(arr_substar_temp)
         print 'arr_substar', arr_substar
-
-
 
         #------
         # load reference imgs one by one
@@ -4330,8 +4491,6 @@ def run_theklip():
                 arr_img2.append(arr_img2_temp)
                 arr_j.append(arr_j_temp)
 
-
-
         #------
         #Load array of filenumbs for ShaneAO, correlation matrix, and corresponding filenumbs in matrix
         #------
@@ -4343,8 +4502,6 @@ def run_theklip():
         arr_filenumbs_corr = pickle.load(open(filename_arrfilenumbscorr, 'rb')).astype(int) #file numbers corresponding to position in correlation matrix
         setnumb1 = int(setnumb1) #set numb for target psf img
         arr_filenumbs = struct_ShaneAO_filenumbs[index_date_targ] #array of filenumbers in target date
-
-
 
         #------
         # getting rid of frames of the same set in correlation matrix
@@ -4361,8 +4518,6 @@ def run_theklip():
                 arr_indexdate_corrs[index_indexdatecorrs*max_numb_imgs:(index_indexdatecorrs+1)*max_numb_imgs] = index_indexdatecorrs
         arr_indexdate_corrs = arr_indexdate_corrs.astype(int)
 
-        
-        
         #------
         # Create list of structures with info for klip
         # Takes certain number of best imgs by referencing correlation matrix
@@ -4410,8 +4565,6 @@ def run_theklip():
                         struct = {'filenumb_img1': i, 'arr_img2': arr_img2_optimal, 'date_ref': date_ref, 'numb_klip_modes':numb_klip_modes, 'max_rad_img': max_rad_img, 'rad_annulus': rad_annulus}
                         arr_pool_vars.append(struct)
                                                 
-        
-                                                
         #------
         # save/load list of structures as needed
         #------
@@ -4423,8 +4576,6 @@ def run_theklip():
         print '------------------------'
         #pickle.dump(arr_pool_vars, open(filename_arrpoolvars, 'wb')) #saves list of structures
         
-
-
         #------
         # run KLIP
         #------
@@ -4440,10 +4591,6 @@ def run_theklip():
         thepool.close()
         thepool.join()
         '''
-
-        
-
-
         
 def theklip(struct):
         #------
@@ -4492,7 +4639,6 @@ def theklip(struct):
                         print filename, 'does not exist'
                         return 0
 
-
                 
         #----------
         #flatten img and save img shape
@@ -4500,7 +4646,6 @@ def theklip(struct):
         img1shape = img1.shape
         img1_flat = img1.flatten()
         radi = 0
-
 
 
         #----------|
@@ -4560,7 +4705,6 @@ def run_klip2():
 	minpix_threshold = 5000 # exclude imgs with pixel values below this number
         arr_klipmodes = np.array([15, 25, 35]).astype(int) # array with number of klip modes to try
 
-
         
 	#------
         #Define mock-up binary arrays
@@ -4572,7 +4716,6 @@ def run_klip2():
         arr_theta = np.array([0])
         print 'arr_theta', arr_theta
         
-
 
         #------
         #arr_date_ShaneAO: array of date names in telescope directory
@@ -4607,7 +4750,6 @@ def run_klip2():
         #print 'arr_bin_setnumbs', arr_bin_setnumbs
 
 
-
         #------
         #check for filter of 1st img in set
         #------
@@ -4615,7 +4757,6 @@ def run_klip2():
         print 'filter_of_set', filter_of_set
 
 
-        
         #------
         # Add reference filenumbs from all dates
         #------
@@ -5158,22 +5299,6 @@ def test_klip():
         hdulist.writeto('test.fits', clobber=True)
         subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)        
                 
-
-
-def run_correlation_matrix_thread():
-        arr_indexdate1 = np.arange(3)
-        #'''
-        threadnumb = 3
-	thepool = ThreadPool(threadnumb)
-        arr_imgfinals = thepool.map(correlation_matrix, arr_indexdate1)
-        thepool.close()
-        thepool.join()
-        #'''
-        '''
-        for index_date1 in arr_indexdate1:
-                correlation_matrix(index_date1)
-        '''
-
         
 def merge_mat():
         filename_output = 'matrix_corr_filt.fits'
@@ -5279,9 +5404,12 @@ def ret_correlation(date1, img1, date2, img2):
         img2/=np.sum(img2)
         return np.std(img1 - img2)
 
+
 def correlation_matrix2(index_date_run, replace_cond = True): #index chunk is anything from  0 to (N^2)-1, where N is number of dates
         #Correlation matrix for FILTERED imgs
         #------
+        
+        max_rad_ring = 4 #radius of masking aperture for primary
 
         numb_dates = len(arr_date_ShaneAO)
         fillelement = 10 #VARIABLE
@@ -5309,7 +5437,6 @@ def correlation_matrix2(index_date_run, replace_cond = True): #index chunk is an
         # Later in function: will zero out primary before calculating correlation
         #------
 	img_empty = np.zeros(imgshape)
-	max_rad_ring = 4
         arr_ringindex = []
         for rad_ring in np.arange(0, max_rad_ring+1):
                 #------
@@ -5912,47 +6039,6 @@ def plotsframe():
         plt.gca().invert_yaxis()
         plt.show()
 
-
-
-def plots1():
-        file1 = raw_input("No. of 1st centroid? (Don't include .fits):")
-        file2 = raw_input("No. of 2nd centroid? (Don't include .fits):")
-
-        img_bef = pf.open('centroid_' + file1 + '.fits')[0].data
-        img_bef /= np.amax(img_bef) #divide by max. brightness
-        center_val = np.amax(img_bef)
-        arr_mdn_bef = np.array([])
-        arr_5sd_bef = np.array([])
-        arr_radi = np.arange(50)+1
-        for radi in arr_radi:
-                struct = check_ring(img_bef, radi)
-                arr_mdn_bef = np.append(arr_mdn_bef, struct['mdn_ring'])
-                arr_5sd_bef = np.append(arr_5sd_bef, 5*struct['sd_ring'])
-
-        arr_5sd = pickle.load(open(file1 + '-' + file2 + '_5sdplot.p', 'rb'))
-        arr_mdn = pickle.load(open(file1 + '-' + file2 + '_mdnplot.p', 'rb'))
-        arr_radi = np.arange(50)+1
-        '''
-        plt.figure()
-        plt.plot(arr_radi, 2.5*np.log10(center_val/np.abs(arr_mdn_bef)), 'rx-', label = 'Median value (before subtraction)' )
-        plt.plot(arr_radi, 2.5*np.log10(center_val/np.abs(arr_mdn)), 'bx-', label = 'Median value (after subtraction)')
-        plt.legend(loc = 'upper right')
-#        plt.yscale('log')
-        plt.xlabel('radius (pixels)')
-        plt.ylabel('magnitude')        
-        plt.gca().invert_yaxis()
-        '''
-
-        plt.figure()
-        plt.plot(arr_radi, 2.5*np.log10(center_val/np.abs(arr_5sd_bef)), 'ro-', label = '5 s.d. value (before subtraction)' )
-        plt.plot(arr_radi, 2.5*np.log10(center_val/np.abs(arr_5sd)), 'bo-', label = '5 s.d. value (after subtraction)')        
-        plt.legend(loc = 'upper right')
-#        plt.yscale('log')
-        plt.xlabel('radius (pixels)')
-        plt.ylabel('magnitude')
-        plt.gca().invert_yaxis()
-        plt.show()
-
 def distance(x1, x2, y1, y2):
 	return math.sqrt( ((x1 - x2)**2.) + ((y1 - y2)**2.) )
 
@@ -6024,7 +6110,7 @@ def gauss_fit(start_test, end_test, y_binary = 0, x_binary = 0):
 
         arr_setnumbs = np.arange(1, total_sets+1)
 
-        for setnumb in [1]:#arr_setnumbs: ####I
+        for setnumb in [1]: #arr_setnumbs:
                 setnumb = str(int(setnumb))
                 arr_startend = open(directory + '/' + date + '/set_'+ setnumb +'_info.txt', 'rb').read().splitlines()
                 start = int(arr_startend[0])
@@ -6184,14 +6270,6 @@ def get_fwhm(img, y_binary = 0, x_binary = 0):
 	return fwhm
 
         
-
-
-
-
-
-
-
-
 def view_detlim():
 	file1 = raw_input("No. of 1st centroid? (Don't include .fits):")
 	file2 = raw_input("No. of 2nd centroid? (Don't include .fits):")
@@ -6204,144 +6282,11 @@ def view_detlim():
         plt.ylabel('radius (pixels)')
         plt.show()
 
-
-def run_detlim():
-        arr_cent1 = np.arange(total_sets)+1
-        arr_cent2 = np.arange(total_sets)+1
-        for file1 in arr_cent1:
-                for file2 in arr_cent2:
-                        if file1 != file2:
-                                print 'centroid_' + str(file1) + '-' + 'centroid_' + str(file2)
-                                psf_subtract(str(file1), str(file2))
-
-
-
-
-######################################################################################
-#################'''It was a good effort! (Useless code)'''############################
-######################################################################################
-
-def detect_maxima():
-#checks image for points of maxima, for potential companions
-	file1 = raw_input("Filename? (Don't include .fits):")
-	img = pf.open(file1 + '.fits')[0].data
-	x_length = img[1].size
-	y_length = img[0].size
-	print 'x_length', x_length
-	print 'y_length', y_length
-	median_img = np.median(img)
-	arr_bool = np.zeros([y_length, x_length])
-	arr_bool.fill(0)
-	numpixels = 3
-
-	for i in np.arange(numpixels)+1:
-		img_chunk = img[i:-i,i:-i]
-		print i
-		for index in np.arange(img_chunk.size):
-			index = np.unravel_index(index, img_chunk.shape)
-			index = np.array(index)
-			index += i
-			#print 'index', index
-			#print 'img.size', img.size
-			img_check = img[index[0]-i:index[0]+i+1,index[1]-i:index[1]+i+1]
-			#print 'img_check.size', img_check.size
-			img_check = np.delete(img_check, (((((2*i)+1))**2)-1)/2, None)
-			if all(elem < img[index[0]][index[1]] for elem in img_check):
-				if img[index[0]][index[1]] > median_img:
-					arr_bool[index[0]][index[1]] += 1
-	condition = np.argwhere(arr_bool < numpixels)
-	condition2 = np.argwhere(arr_bool == numpixels)
-	for item in condition:
-		arr_bool[item[0]][item[1]] = 0
-	for item2 in condition2:
-		arr_bool[item2[0]][item2[1]] = 1
-	hdu = pf.PrimaryHDU(arr_bool)
-	hdulist = pf.HDUList([hdu])
-	hdulist.writeto(file1 + '_test_maxima.fits', clobber=True)
-
-
-def test_gaussian():
-	file1 = raw_input("Centroid? (Don't include .fits):")
-	img1 = pf.open('centroid_'+file1+'.fits')[0].data
-	x_length = img1.shape[1]
-	y_length = img1.shape[0]
-	arr = np.zeros([y_length,x_length])
-	arr[(y_length-1)/2, (x_length-1)/2] = 1.
-	arr_RSS = np.array([])
-	n_elem_sd = 50
-	range_sd = np.linspace(0.001, 0.4, n_elem_sd)
-	for index_sd in range(n_elem_sd):
-		arr_gaussian = []
-		for y in np.arange(y_length) - ((y_length-1)/2):
-			y_index = y + ((y_length-1)/2)
-			for x in np.arange(x_length) - ((x_length-1)/2):
-				x_index = x +((x_length-1)/2)
-				val = gaussian(y,x,range_sd[index_sd])			
-				arr_gaussian.append(val)
-		arr_gaussian = np.array(arr_gaussian)
-		arr_gaussian = np.reshape(arr_gaussian, [y_length, x_length])
-		arr_residuals = img1 - arr_gaussian
-		arr_sq_res = arr_residuals**2.
-		arr_RSS = np.append(arr_RSS, np.sum(arr_sq_res))
-	#arr_RSS = np.reshape(arr_RSS, [y_length, x_length])
-	print arr_RSS.size
-	min_RSS_index = np.argmin(arr_RSS)
-	min_sd = range_sd[min_RSS_index]
-	print min_RSS_index
-        plt.imshow(img1)
-
-
-def test_check_binary():
-        img = np.zeros([161, 161])
-        img.fill(0)
-        y_length = img.shape[0]
-	x_length = img.shape[1]
-	center_index = [(y_length-1)/2, (x_length-1)/2]
-
-	center = np.array(center_index) ###_value at center_###
-	arr_index = []
-
-        counter = 0
-        for element in np.arange(0, 80+1):
-                ringvals, ringindexes = return_ring(img, element)
-                #print 'len(ringindexes)', len(ringindexes)
-                print len(ringindexes) #*(360-80)/360.
-                for r_index in ringindexes:
-                        img[r_index[0], r_index[1]] = 1
-                hdu = pf.PrimaryHDU(img)
-                hdulist = pf.HDUList([hdu])
-                hdulist.writeto('test_check_binary.fits', clobber=True)
-                subprocess.call('/home/apps/ds9/ds9 test_check_binary.fits', shell = True)
-                
-        '''
-	for y_index in np.arange(y_length):
-		for x_index in np.arange(x_length):
-                        if (radi-0.5) < distance(center_index[0], y_index, center_index[1], x_index) < (radi+0.5): #creating ring of radius: radi
-				arr_index.append([y_index, x_index]) #appending indexes of points in ring
-        print len(arr_index)
-	for element in arr_index:
-                img[element[0]][element[1]] = 1
-
-        hdu = pf.PrimaryHDU(img)
-	hdulist = pf.HDUList([hdu])
-	hdulist.writeto('test_ring.fits', clobber=True)
-        subprocess.call('/home/apps/ds9/ds9 test_ring.fits', shell = True)
-        '''
         
 def open_fits(filename):
         #filename = raw_input('Name of fits file(Do not include .fits):')
         subprocess.call('/home/apps/ds9/ds9 ' + filename, shell = True)
 
-def open_fits_center(filename):
-                img = afits.open(filename)[0].data
-                img_center = img[region_y_min_index:region_y_max_index,region_x_min_index:region_x_max_index]
-                img_center /= np.median(img_center)
-                hdu = afits.PrimaryHDU(img_center)
-                hdulist = afits.HDUList([hdu])
-                hdulist.writeto('test.fits', clobber = True)
-                subprocess.call('/home/apps/ds9/ds9 ' + 'test.fits', shell = True)
-
-                                                        
 
 def openview_pickle(filename):
         img_final = pickle.load(open(filename, "rb"))
@@ -6352,180 +6297,3 @@ def openview_pickle(filename):
 
 def open_fits_taurus(filename):
         subprocess.call(ds9_taurus + filename, shell = True)
-
-                
-def outdated_Loci():
-        #define parameters for loci
-        radius_sub = 1 #subtraction radius
-        radius_op = 3 #optimization radius                                                                                                             
-
-        #ask for user input regarding which set to take as target psf
-        #reads txt file in directory to know which files to use
-        setnumb1 = raw_input('Enter 1st set number (1,2,3,4, etc.):')
-        arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
-        start1 = int(arr_startend1[0])
-        end1 = int(arr_startend1[1])
-
-        arr_substar = np.array([]) #array for adding ref psf filenames
-	arr_setnumb = np.array([]) #array for adding target psf filenames
-	for setnumb2 in np.arange(1,total_sets+1):
-                if setnumb2 != int(setnumb1):
-                        print 'adding elements in set no.', setnumb2
-                        arr_startend2 = open(directory + '/' + date + '/' + 'set_' + str(setnumb2) +'_info.txt', 'rb').read().splitlines()
-                        start2 = int(arr_startend2[0])
-                        end2 = int(arr_startend2[1])
-                        arr_imgnumbs = np.arange(start2, end2+1)
-                        arr_substar = np.append( arr_substar,  arr_imgnumbs) #array of filenames for ref psf
-			arr_temp = np.zeros(arr_imgnumbs.size)
-                        arr_temp.fill(setnumb2)
-                        arr_setnumb = np.append(arr_setnumb, arr_temp) #set numbers
-
-        ##### FOR TESTING #####
-	arr_substar = arr_substar[0:20]
-        print arr_substar
-        arr_setnumb = arr_setnumb[0:20]
-        print arr_setnumb
-        arr_refpsf = np.arange(start1, start1 + 10)
-        ####################### 
-        
-        #define subtraction ratios to be iterated through                                                                                                       
-        arr_rad = np.arange(1, 55, radius_sub)
-        arr_rad = arr_rad.astype(int)
-        arr_radcheck = np.arange(55)+1
-        arr_subratio = (np.arange(20)+90)/100.
-
-        #define empty arrays, for psf-subtracted imgs for avging
-        arr_img = []
-        arr_mdn = np.array([])
-        arr_5sd = np.array([])
-
-        #arr_refpsf = np.arange(start1, end1+1)
-        arr_imgfinals = []
-
-        
-        threadlist = []
-        threadcount = 0
-        for i in arr_refpsf: #iterating through images in the 1st set
-                print '_________'
-                print i
-                if i > 999:
-                        filename = directory + '/' + date  + '/s' + str(int(i)) + '_reduced_centered.fits'
-                        if exists(filename):
-                                img1 = pf.open(filename)[0].data
-                                img1 /= np.amax(img1)
-                        else:
-                                continue
-                else:
-                        filename =  directory + '/' + date + '/s0' + str(int(i)) + '_reduced_centered.fits'
-                        if exists(filename):
-                                img1 = pf.open(filename)[0].data
-                                img1 /= np.amax(img1)
-                        else:
-                                continue
-                img_final = np.zeros(img1.shape)
-                for radi in arr_rad:
-                        print 'working on radius', radi
-                        arr_radsub = np.arange(radi, radi+radius_sub)
-                        #print arr_radsub
-                        arr_radop = np.arange(radi, radi+radius_op)
-                        #print arr_radop
-                        img1op = np.array([])
-                        arr_indexop = []
-                        for rad_op in arr_radop: #creating target optimization annulus
-                                arr_ringop, indexop = return_ring(img1, rad_op)
-                                for element in indexop:
-                                        arr_indexop.append(element)
-                                img1op = np.append(img1op, arr_ringop)
-
-                        img1sub = np.array([])
-                        arr_indexsub = []
-                        for rad_sub in arr_radsub: #creating target subtraction annulus
-                                arr_ringsub, indexsub = return_ring(img1, rad_sub)
-                                for element in indexsub:
-                                        arr_indexsub.append(element)
-                                img1sub = np.append(img1sub, arr_ringsub)
-                        #arr_refsub = np.array([])
-                        arr_refop = np.array([])
-                        arr_j = []
-                        counter2 = 0
-                        for j in arr_substar: #loop through ref imgs
-                                arr_output = []
-                                arr_rss = np.array([])
-                                j_index = np.argwhere(arr_substar == j)
-                                j_index = j_index[0]
-                                j_index = j_index[0]
-                                if j > 999:
-                                        filename =  directory + '/' + date  + '/s' + str(int(j)) + '_reduced_centered.fits'
-                                        if exists(filename):
-                                                img2 = pf.open(filename)[0].data
-                                                img2 /= np.amax(img2)
-                                        else:
-                                                continue
-                                else:
-                                        filename =  directory + '/' + date  + '/s0' + str(int(j)) + '_reduced_centered.fits'
-                                        if exists(filename):
-                                                img2 = pf.open(filename)[0].data
-                                                img2 /= np.amax(img2)
-                                        else:
-                                                continue
-                                arr_j.append(int(j))
-
-                                img2op = np.array([])
-                                for rad_op in arr_radop: #creating reference optimization anunulus
-                                        img2op = np.append(img2op, return_ring(img2, rad_op)[0])
-                                img2op_temp = img2op.reshape(-1,1)
-				
-				if counter2 == 0:
-                                        arr_refop = img2op_temp
-                                        #arr_refsub = img2sub_temp
-				else:
-			                arr_refop = np.concatenate((arr_refop, img2op_temp), axis = 1)
-                                        #arr_refsub = np.concatenate((arr_refsub, img2sub_temp), axis = 1)
-                                counter2 += 1
-                        Y = img1op
-                        print 'Y.shape', Y.shape
-                        X = arr_refop
-                        print 'X.shape', X.shape
-                        alpha = np.dot(np.transpose(X), X)
-                        beta = np.dot(np.transpose(X), Y)
-                        coeffs = np.dot(np.linalg.inv(alpha), beta)
-                        print 'sum of coeffs', np.sum(coeffs)
-                        #print 'coeffs.shape', coeffs.shape
-                        img_fill_annulus = np.zeros(img1.shape)
-                        #print 'arr_j', arr_j
-                        for index_imgs in np.arange(len(arr_j)):
-                                j = arr_j[index_imgs]
-                                j_index = np.argwhere(arr_substar == j)
-                                j_index = j_index[0]
-                                j_index = j_index[0]
-                                if j > 999:
-                                        filename =  directory + '/' + date + '/s' + str(int(j)) + '_reduced_centered.fits'
-                                        img_temp = pf.open(filename)[0].data
-                                else:
-                                        filename =  directory + '/' + date + '/s0' + str(int(j)) + '_reduced_centered.fits'
-                                        img_temp = pf.open(filename)[0].data
-                                img_temp /= np.amax(img_temp)
-                                img_fill_annulus += coeffs[index_imgs]*img_temp
-                        for coord_annulus in arr_indexsub:
-                                img_final[coord_annulus[0], coord_annulus[1]] = img_fill_annulus[coord_annulus[0], coord_annulus[1]]
-
-                img_output = img1 - img_final
-                arr_imgfinals.append(img_output)
-                #hdu = pf.PrimaryHDU(img_output)
-                #hdulist = pf.HDUList([hdu])
-                #hdulist.writeto( directory + '/' + date + '/' 'test_loci.fits', clobber=True)
-                #subprocess.call('/home/apps/ds9/ds9 test_loci.fits', shell = True)
-        img_mdn = np.median(np.array(arr_imgfinals), axis = 0)
-        print 'img_mdn.shape', img_mdn.shape
-        for radius in arr_radcheck:
-                struct = check_ring(img_mdn, radius)
-                arr_mdn = np.append(arr_mdn, struct['mdn_ring'])
-                arr_5sd = np.append(arr_5sd, 5*struct['sd_ring'])
-
-        hdu = pf.PrimaryHDU(img_mdn)
-        hdulist = pf.HDUList([hdu])
-        hdulist.writeto(directory + '/' + date + 'set' + setnumb1 + '_loci' + '.fits', clobber=True)
-
-        pickle.dump(arr_5sd, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_5sdplot.p", 'wb'))
-        pickle.dump(arr_mdn, open(directory + '/' + date + '/' + 'set' + setnumb1 + '_loci' + "_mdnplot.p", 'wb'))
-
