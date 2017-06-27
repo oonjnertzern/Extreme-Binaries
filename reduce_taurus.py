@@ -502,29 +502,15 @@ def rename_img_subed_stacked_faint(setnumb):
 
 
 def create_stacked_mockinit():
-        arr_radiusmock = np.array([10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80]).astype(int)
+        arr_radiusmock = pf_loadfits(directory + '/' + date_targ + '/' + 'arr_radiusmock.fits')
         print 'arr_radiusmock:', arr_radiusmock
         
         arr_theta = np.arange(0, 360, 60).astype(int) 
         print 'arr_theta:', arr_theta
+        
+        detlim_mult_factor = 10
 
-
-        filename_subed = directory + '/' + date_targ + '/' + 'set' + str(int(setnumb)) + '_locifiltfinal.fits'
-        img_subed = pf_loadfits('')
-
-        #------
-        #Iterate through radii for mock binaries
-        #Check LOCI-subtracted img for 5 sigma value at that radius
-        #Create array of corresponding flux ratio
-        #------
-        arr_fluxratio = []
-        for rad_mock in arr_radiusmock:
-                struct_ring = check_ring(img_subed, rad_mock)
-                sd_ring = struct_ring['sd_ring']
-                arr_fluxratio.append(5*sd_ring*detlim_mult_factor)
-
-
-        for setnumb1 in np.arange(1, struct_ShaneAO_total_sets[date]-6).astype(int): ###temporary
+        for setnumb1 in np.arange(1, struct_ShaneAO_total_sets[date_targ]-6).astype(int): ###temporary
                 print '------'
                 print 'set:', setnumb1
                 print '------'
@@ -534,28 +520,82 @@ def create_stacked_mockinit():
                 # read txt file in directory to know which files to use
                 #------
                 setnumb1 = str(setnumb1)
-                arr_startend1 = open(directory + '/' + date + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
+                arr_startend1 = open(directory + '/' + date_targ + '/set_'+ setnumb1 +'_info.txt', 'rb').read().splitlines()
                 start1 = int(arr_startend1[0])
                 end1 = int(arr_startend1[1])
                 arr_targpsf = np.arange(start1, end1+1)
 
-                for radius_mock in arr_radiusmock:
+                filename_subed = directory + '/' + date_targ + '/' + 'set' + str(int(setnumb1)) + '_locifiltfinal.fits'
+                img_subed = pf_loadfits(filename_subed)
+
+                #------
+                #Iterate through radii for mock binaries
+                #Check LOCI-subtracted img for 5 sigma value at that radius
+                #Create array of corresponding flux ratio
+                #------
+                arr_fluxratio = []
+                for rad_mock in arr_radiusmock:
+                        struct_ring = check_ring(img_subed, rad_mock)
+                        sd_ring = struct_ring['sd_ring']
+                        arr_fluxratio.append(5*sd_ring*detlim_mult_factor)
+
+                for index_rad in range(len(arr_radiusmock)):
+                        radius_mock = arr_radiusmock[index_rad]
+                        radius_mock = 45
                         for theta_mock in arr_theta:
-                                filename_old = directory + '/' + date + '/' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
-                                filename_mockinit_output = directory + '/' + date + '/set' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                filename_old = directory + '/' + date_targ + '/' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                filename_mockinit_output = directory + '/' + date_targ + '/set' + str(int(setnumb1)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+
+
+                                #----------
+                                #load mock binary and divide by predetermined factor
+                                #***Change centroid filename if necessary***
+                                #----------
+                                img_mock = pf.open(directory + '/' + 'Jun15' + '/' + 'centroid_1.fits')[0].data
+                                img_mock /= np.amax(img_mock)
+                                img_mock *= float(arr_fluxratio[index_rad])
+                                        
+                                #--------
+                                #Add mock binary at correct radius & angle, save img as fits file
+                                #--------
+                                dx_mock, dy_mock = cartesian2polar(radius_mock , theta_mock, inv = True)
+                                dx_mock = int(round(dx_mock))
+                                dy_mock = int(round(dy_mock))
+                                      
+                                #Fourier shift to construct binary for adding to primary
+                                img_mock = fourier_shift(img_mock , [dy_mock, dx_mock])
 
                                 if exists(filename_old):
                                         subprocess.call('mv ' + filename_old + ' ' + filename_mockinit_output, shell = True)
-                                        continue
+                                        #continue
 
                                 arr_imgs = []
                                 for imgnumb in arr_targpsf:
-                                        filename_mockinit = directory + '/' + date + '/' + str(int(imgnumb)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
-                                        img = pf_loadfits(filename_mockinit, True)
-                                        if img.size:
-                                                arr_imgs.append(img)
+                                        #------
+                                        #load target img, divide by max pixel value
+                                        #------
+                                        filename = directory + '/' + date_targ  + '/s' + str(int(imgnumb)).zfill(4) + '_reduced_centered.fits'
+                                        if exists(filename):
+                                                try:
+                                                        img1 = pf_loadfits(filename)
+                                                        img1 /= np.amax(img1)
+                                                except:
+                                                        print 'error opening file:', filename
+                                                        return 0
+                                        else:
+                                                continue
+
+                                        img1 += img_mock
+
+                                        filename_mockinit = directory + '/' + date_targ + '/' + str(int(imgnumb)) + '_radmock' + str(int(radius_mock)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                        pf_savefits(img1, filename_mockinit)
+                                        #img1 = pf_loadfits(filename_mockinit, True)
+                                        if img1.size:
+                                                arr_imgs.append(img1)
                                 img_output = np.median(np.array(arr_imgs), axis = 0)
                                 pf_savefits(img_output, filename_mockinit_output)
+                                print 'saved:', filename_mockinit_output
+                                #open_fits(filename_mockinit_output)
 
 def histo_improve_curves():
         #------
@@ -841,17 +881,17 @@ def compare_brightmock_annul():
 
                         for radius_large in arr_radiusmock[np.where(arr_radiusmock > 40)]:
                                 for theta_mock in arr_theta:
-                                        filename_mockinit = directory + '/' + date_targ + '/' +'set' + str(int(setnumb)) + '_radmock' + str(int(radius_large)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
+                                        print '------'
+                                        print 'r', radius_large, ', theta', theta_mock
 
+                                        filename_mockinit = directory + '/' + date_targ + '/' +'set' + str(int(setnumb)) + '_radmock' + str(int(radius_large)) + '_theta' + str(int(theta_mock)) + '_mockinit.fits'
                                         if exists(filename_mockinit):
                                                 img_mockinit = pf_loadfits(filename_mockinit)
-                                                #pf_savefits(img_mockinit, 'test.fits')
-                                                #open_fits('test.fits')
+                                                pf_savefits(img_mockinit, 'test.fits')
+                                                open_fits('test.fits')
                                         else:
                                                 continue
-                                        print '------'
 
-                                        print 'r', radius_large, ', theta', theta_mock
                                         shift_xy = cartesian2polar(radius_large, theta_mock, inv = True)
                                         shift_yx = np.array(shift_xy)[::-1]
                                         index_bin = ret_index_center(img_mockinit) + shift_yx
@@ -2317,6 +2357,18 @@ def run_subframe():
         for elem in arr_struct:
                 psf_subtract_frame(elem)
         '''
+
+def read_info_mockup_sets():
+        #------
+        #open txt file with calibration binaries' img numbers
+        #------
+        filename_txt = directory + '/' + 'catalog_loci_mockbin.txt'
+        if exists(filename_txt): 
+                #load txt file as list, with each row as one element of list
+                with open(filename_txt, 'rb') as f: 
+                        arr_bin = f.read().splitlines()
+        else:
+                print 'ERROR:', filename_txt, 'doesnt exist'
 
 def print_calbin(): #TEMP#
         arr_dates = []
@@ -6303,6 +6355,15 @@ def distance(x1, x2, y1, y2):
 	return math.sqrt( ((x1 - x2)**2.) + ((y1 - y2)**2.) )
 
 def cartesian2polar(var1, var2, inv = False):
+        #Change cartesian to polar coordinates vice versa
+        #------
+        # Inputs:
+        #  x, y OR r, angle(in degrees)
+        #  set inv = True if going from polar to cartesian
+        #-----
+        # Outputs:
+        #  r, angle(in degrees) OR x, y
+        #------
         if inv:
                 r = var1 
                 angle = var2 #in degrees initially
